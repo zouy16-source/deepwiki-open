@@ -9,7 +9,7 @@ import WikiTreeView from '@/components/WikiTreeView';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { RepoInfo } from '@/types/repoinfo';
 import getRepoUrl from '@/utils/getRepoUrl';
-import { extractUrlDomain, extractUrlPath } from '@/utils/urlDecoder';
+import { extractUrlPath } from '@/utils/urlDecoder';
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -144,18 +144,6 @@ const createGithubHeaders = (githubToken: string): HeadersInit => {
 
   if (githubToken) {
     headers['Authorization'] = `Bearer ${githubToken}`;
-  }
-
-  return headers;
-};
-
-const createGitlabHeaders = (gitlabToken: string): HeadersInit => {
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-  };
-
-  if (gitlabToken) {
-    headers['PRIVATE-TOKEN'] = gitlabToken;
   }
 
   return headers;
@@ -545,7 +533,7 @@ Remember:
         try {
           // Create WebSocket URL from the server base URL
           const serverBaseUrl = process.env.SERVER_BASE_URL || 'http://localhost:8001';
-          const wsBaseUrl = serverBaseUrl.replace(/^http/, 'ws')? serverBaseUrl.replace(/^https/, 'wss'): serverBaseUrl.replace(/^http/, 'ws');
+          const wsBaseUrl = serverBaseUrl.replace(/^http/, 'ws');
           const wsUrl = `${wsBaseUrl}/ws/chat`;
 
           // Create a new WebSocket connection
@@ -842,7 +830,7 @@ IMPORTANT:
       try {
         // Create WebSocket URL from the server base URL
         const serverBaseUrl = process.env.SERVER_BASE_URL || 'http://localhost:8001';
-        const wsBaseUrl = serverBaseUrl.replace(/^http/, 'ws')? serverBaseUrl.replace(/^https/, 'wss'): serverBaseUrl.replace(/^http/, 'ws');
+        const wsBaseUrl = serverBaseUrl.replace(/^http/, 'ws');
         const wsUrl = `${wsBaseUrl}/ws/chat`;
 
         // Create a new WebSocket connection
@@ -1317,83 +1305,31 @@ IMPORTANT:
         }
       }
       else if (effectiveRepoInfo.type === 'gitlab') {
-        // GitLab API approach
-        const projectPath = extractUrlPath(effectiveRepoInfo.repoUrl ?? '')?.replace(/\.git$/, '') || `${owner}/${repo}`;
-        const projectDomain = extractUrlDomain(effectiveRepoInfo.repoUrl ?? "https://gitlab.com");
-        const encodedProjectPath = encodeURIComponent(projectPath);
-
-        const headers = createGitlabHeaders(currentToken);
-
-        /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-        const filesData: any[] = [];
-
+        // Self-hosted GitLab: fetch the file tree via our backend proxy. This avoids
+        // browser-side issues with self-hosted instances (http/https web_url, redirects,
+        // missing repo_url) and keeps the token server-side (falls back to the server
+        // GITLAB_TOKEN when none is passed).
         try {
-          // Step 1: Get project info to determine default branch
-          let projectInfoUrl: string;
-          let defaultBranchLocal = 'main'; // fallback
-          try {
-            const validatedUrl = new URL(projectDomain ?? ''); // Validate domain
-            projectInfoUrl = `${validatedUrl.origin}/api/v4/projects/${encodedProjectPath}`;
-          } catch (err) {
-            throw new Error(`Invalid project domain URL: ${projectDomain}`);
+          const params = new URLSearchParams();
+          params.append('repo_url', effectiveRepoInfo.repoUrl || `${owner}/${repo}`);
+          if (currentToken) {
+            params.append('token', currentToken);
           }
-          const projectInfoRes = await fetch(projectInfoUrl, { headers });
-
-          if (!projectInfoRes.ok) {
-            const errorData = await projectInfoRes.text();
-            throw new Error(`GitLab project info error: Status ${projectInfoRes.status}, Response: ${errorData}`);
+          const response = await fetch(`/api/gitlab/file_tree?${params.toString()}`);
+          if (!response.ok) {
+            const errorData = await response.text();
+            throw new Error(`Error fetching GitLab repository structure: ${errorData}`);
           }
-
-          const projectInfo = await projectInfoRes.json();
-          defaultBranchLocal = projectInfo.default_branch || 'main';
-          console.log(`Found GitLab default branch: ${defaultBranchLocal}`);
-          // Store the default branch in state
-          setDefaultBranch(defaultBranchLocal);
-
-          // Step 2: Paginate to fetch full file tree
-          let page = 1;
-          let morePages = true;
-          
-          while (morePages) {
-            const apiUrl = `${projectInfoUrl}/repository/tree?recursive=true&per_page=100&page=${page}`;
-            const response = await fetch(apiUrl, { headers });
-
-            if (!response.ok) {
-                const errorData = await response.text();
-              throw new Error(`Error fetching GitLab repository structure (page ${page}): ${errorData}`);
-            }
-
-            const pageData = await response.json();
-            filesData.push(...pageData);
-
-            const nextPage = response.headers.get('x-next-page');
-            morePages = !!nextPage;
-            page = nextPage ? parseInt(nextPage, 10) : page + 1;
-        }
-
-          if (!Array.isArray(filesData) || filesData.length === 0) {
+          const data = await response.json();
+          if (data.error) {
+            throw new Error(data.error);
+          }
+          fileTreeData = data.file_tree || '';
+          readmeContent = data.readme || '';
+          setDefaultBranch(data.default_branch || 'main');
+          if (!fileTreeData) {
             throw new Error('Could not fetch repository structure. Repository might be empty or inaccessible.');
-        }
-
-          // Step 3: Format file paths
-        fileTreeData = filesData
-          .filter((item: { type: string; path: string }) => item.type === 'blob')
-          .map((item: { type: string; path: string }) => item.path)
-          .join('\n');
-
-          // Step 4: Try to fetch README.md content
-          const readmeUrl = `${projectInfoUrl}/repository/files/README.md/raw`;
-            try {
-            const readmeResponse = await fetch(readmeUrl, { headers });
-              if (readmeResponse.ok) {
-                readmeContent = await readmeResponse.text();
-                console.log('Successfully fetched GitLab README.md');
-              } else {
-              console.warn(`Could not fetch GitLab README.md status: ${readmeResponse.status}`);
-              }
-            } catch (err) {
-            console.warn(`Error fetching GitLab README.md:`, err);
-            }
+          }
         } catch (err) {
           console.error("Error during GitLab repository tree retrieval:", err);
           throw err;

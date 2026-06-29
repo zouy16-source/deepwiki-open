@@ -70,8 +70,11 @@ ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken_cache/
 
 # Copy Python dependencies
 COPY --from=py_deps /api/.venv /opt/venv
-RUN mkdir -p "$TIKTOKEN_CACHE_DIR" && \
-    python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
+RUN mkdir -p "$TIKTOKEN_CACHE_DIR"
+# China-region: openaipublic.blob.core.windows.net is blocked, so use a
+# pre-fetched cl100k_base cache file (sha256-verified) instead of downloading.
+COPY tiktoken_cache/9b5ad71b2ce5302211f9c61530b329a4922fc6a4 /opt/tiktoken_cache/9b5ad71b2ce5302211f9c61530b329a4922fc6a4
+RUN python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 COPY api/ ./api/
 
 # Copy Node app

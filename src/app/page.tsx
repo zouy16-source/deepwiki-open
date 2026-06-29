@@ -409,6 +409,12 @@ export default function Home() {
                     {t('nav.wikiProjects')}
                   </Link>
                 </div>
+                <div className="hidden md:inline-block">
+                  <Link href="/wiki/catalog"
+                    className="text-xs font-medium text-[var(--accent-primary)] hover:text-[var(--highlight)] hover:underline whitespace-nowrap">
+                    仓库目录
+                  </Link>
+                </div>
               </div>
             </div>
           </div>

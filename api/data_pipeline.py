@@ -101,7 +101,11 @@ def download_repo(repo_url: str, local_path: str, repo_type: str = None, access_
         # Ensure the local path exists
         os.makedirs(local_path, exist_ok=True)
 
-        # Prepare the clone URL with access token if provided
+        # Prepare the clone URL with access token if provided.
+        # Catalog/server flow: fall back to a server-side token for private GitLab
+        # repos when the request didn't include one.
+        if not access_token and repo_type == "gitlab":
+            access_token = os.environ.get("GITLAB_TOKEN")
         clone_url = repo_url
         if access_token:
             parsed = urlparse(repo_url)
@@ -114,7 +118,11 @@ def download_repo(repo_url: str, local_path: str, repo_type: str = None, access_
                 clone_url = urlunparse((parsed.scheme, f"{encoded_token}@{parsed.netloc}", parsed.path, '', '', ''))
             elif repo_type == "gitlab":
                 # Format: https://oauth2:{token}@gitlab.com/owner/repo.git
-                clone_url = urlunparse((parsed.scheme, f"oauth2:{encoded_token}@{parsed.netloc}", parsed.path, '', '', ''))
+                # Ensure the ".git" suffix — without it GitLab routes the request to
+                # its web endpoint, which rejects HTTP Basic auth ("HTTP Basic: Access
+                # denied"), notably on self-hosted instances.
+                gl_path = parsed.path if parsed.path.endswith(".git") else parsed.path + ".git"
+                clone_url = urlunparse((parsed.scheme, f"oauth2:{encoded_token}@{parsed.netloc}", gl_path, '', '', ''))
             elif repo_type == "bitbucket":
                 # Bitbucket has two token formats with different auth schemes:
                 #   - HTTP access tokens (prefix "ATCTT") use x-bitbucket-api-token-auth

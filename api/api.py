@@ -573,6 +573,138 @@ async def root():
         "endpoints": endpoints
     }
 
+# --- GitLab Project Catalog Endpoint ---
+@app.get("/api/gitlab/projects")
+def list_gitlab_projects(search: str = "", page: int = 1):
+    """List GitLab projects the server token can access (repo-catalog feature).
+
+    Uses server-side GITLAB_URL / GITLAB_TOKEN. When `search` is given, scans pages
+    and fuzzy-matches path/name/description (GitLab's own search only covers name/path).
+    """
+    import os
+    import requests
+    import urllib3
+
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    base = (os.environ.get("GITLAB_URL") or "https://gitlab.com").rstrip("/")
+    token = os.environ.get("GITLAB_TOKEN", "")
+    if not token:
+        return {"projects": [], "nextPage": None, "error": "Server GITLAB_TOKEN not configured"}
+
+    api = f"{base}/api/v4/projects"
+    headers = {"PRIVATE-TOKEN": token}
+
+    def fetch_page(p: int, per_page: int):
+        url = (f"{api}?membership=true&simple=true&order_by=last_activity_at"
+               f"&per_page={per_page}&page={p}")
+        r = requests.get(url, headers=headers, verify=False, timeout=20)
+        r.raise_for_status()
+        nxt = r.headers.get("X-Next-Page")
+        return r.json(), (int(nxt) if nxt else None)
+
+    def to_item(pr: dict):
+        return {
+            "pathWithNamespace": pr.get("path_with_namespace"),
+            "name": pr.get("name"),
+            "description": pr.get("description"),
+            "defaultBranch": pr.get("default_branch"),
+            "starCount": pr.get("star_count", 0),
+            "webUrl": pr.get("web_url"),
+        }
+
+    try:
+        if not search:
+            data, nxt = fetch_page(max(1, page), 30)
+            return {"projects": [to_item(x) for x in data], "nextPage": nxt}
+        scanned = []
+        p = 1
+        while p and len(scanned) < 600:
+            batch, nxt = fetch_page(p, 100)
+            scanned.extend(batch)
+            p = nxt
+        q = search.lower()
+        matched = [to_item(x) for x in scanned
+                   if q in (x.get("path_with_namespace") or "").lower()
+                   or q in (x.get("name") or "").lower()
+                   or q in (x.get("description") or "").lower()]
+        return {"projects": matched, "nextPage": None}
+    except Exception as e:
+        logger.error(f"Failed to list GitLab projects: {e}")
+        return {"projects": [], "nextPage": None, "error": str(e)}
+
+
+# --- GitLab File Tree Endpoint (server-side, avoids browser http/https/CORS issues) ---
+@app.get("/api/gitlab/file_tree")
+def gitlab_file_tree(repo_url: str, token: str = ""):
+    """Return the file tree (+ README, default branch) of a GitLab repo, fetched
+    server-side. The frontend calls this instead of hitting the GitLab API from the
+    browser (which breaks on self-hosted http/https + redirects). Falls back to the
+    server GITLAB_TOKEN/GITLAB_URL when not provided.
+    """
+    import os
+    import requests
+    import urllib3
+    from urllib.parse import urlparse, quote
+
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    tok = token or os.environ.get("GITLAB_TOKEN", "")
+    headers = {"PRIVATE-TOKEN": tok} if tok else {}
+
+    parsed = urlparse(repo_url)
+    if parsed.netloc:
+        base = f"https://{parsed.netloc}"          # force https for reliability
+        project_path = parsed.path.strip("/").replace(".git", "")
+    else:
+        base = (os.environ.get("GITLAB_URL") or "https://gitlab.com").rstrip("/")
+        project_path = repo_url.strip("/").replace(".git", "")
+    encoded = quote(project_path, safe="")
+    api = f"{base}/api/v4/projects/{encoded}"
+
+    try:
+        default_branch = "main"
+        info = requests.get(api, headers=headers, verify=False, timeout=20)
+        if info.status_code == 200:
+            default_branch = info.json().get("default_branch") or "main"
+        elif info.status_code in (401, 403, 404):
+            return {"error": f"GitLab project info error: HTTP {info.status_code}",
+                    "file_tree": "", "default_branch": "main", "readme": ""}
+
+        paths = []
+        page = 1
+        while True:
+            r = requests.get(
+                f"{api}/repository/tree?recursive=true&per_page=100&page={page}",
+                headers=headers, verify=False, timeout=30)
+            r.raise_for_status()
+            for it in r.json():
+                if it.get("type") == "blob" and it.get("path"):
+                    paths.append(it["path"])
+            nxt = r.headers.get("X-Next-Page")
+            if nxt:
+                page = int(nxt)
+            else:
+                break
+            if page > 1000:
+                break
+
+        readme = ""
+        try:
+            rr = requests.get(
+                f"{api}/repository/files/README.md/raw?ref={quote(default_branch, safe='')}",
+                headers=headers, verify=False, timeout=20)
+            if rr.status_code == 200:
+                readme = rr.text
+        except Exception:
+            pass
+
+        return {"file_tree": "\n".join(paths), "default_branch": default_branch, "readme": readme}
+    except Exception as e:
+        logger.error(f"Failed to fetch GitLab file tree: {e}")
+        return {"error": str(e), "file_tree": "", "default_branch": "main", "readme": ""}
+
+
 # --- Processed Projects Endpoint --- (New Endpoint)
 @app.get("/api/processed_projects", response_model=List[ProcessedProjectEntry])
 async def get_processed_projects():
