@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Replaces next-themes' useTheme(). color-mode writes data-theme on <html>.
+// Nuxt UI button bound to color-mode (writes data-theme on <html>).
 const colorMode = useColorMode()
 
 function toggle() {
@@ -8,17 +8,17 @@ function toggle() {
 </script>
 
 <template>
-  <button
-    type="button"
-    :aria-label="`Switch to ${colorMode.value === 'dark' ? 'light' : 'dark'} mode`"
-    class="p-2 rounded-lg border border-[var(--border-color)] text-[var(--foreground)] hover:bg-[var(--background)] transition-colors"
-    @click="toggle"
-  >
-    <ClientOnly>
-      <Icon :name="colorMode.value === 'dark' ? 'fa6-solid:sun' : 'fa6-solid:moon'" class="text-base" />
-      <template #fallback>
-        <span class="inline-block w-4 h-4" />
-      </template>
-    </ClientOnly>
-  </button>
+  <ClientOnly>
+    <UButton
+      :icon="colorMode.value === 'dark' ? 'i-lucide-sun' : 'i-lucide-moon'"
+      color="neutral"
+      variant="ghost"
+      square
+      :aria-label="`Switch to ${colorMode.value === 'dark' ? 'light' : 'dark'} mode`"
+      @click="toggle"
+    />
+    <template #fallback>
+      <div class="size-8" />
+    </template>
+  </ClientOnly>
 </template>

@@ -1,21 +1,23 @@
 <script setup lang="ts">
-// Replaces the custom LanguageContext. Locales come from nuxt.config i18n.
+// Nuxt UI select bound to vue-i18n. Locales come from nuxt.config i18n.
 const { locale, locales, setLocale } = useI18n()
 
-async function onChange(event: Event) {
-  const code = (event.target as HTMLSelectElement).value
-  await setLocale(code as typeof locale.value)
-}
+const items = computed(() =>
+  (locales.value as Array<{ code: string; name: string }>).map((l) => ({ label: l.name, value: l.code })),
+)
+const model = computed({
+  get: () => locale.value,
+  set: (v: string) => { void setLocale(v as typeof locale.value) },
+})
 </script>
 
 <template>
-  <select
-    :value="locale"
-    class="input-japanese text-sm bg-[var(--card-bg)] text-[var(--foreground)]"
-    @change="onChange"
-  >
-    <option v-for="l in locales" :key="l.code" :value="l.code">
-      {{ l.name }}
-    </option>
-  </select>
+  <USelect
+    v-model="model"
+    :items="items"
+    icon="i-lucide-languages"
+    color="neutral"
+    variant="ghost"
+    :ui="{ base: 'min-w-28' }"
+  />
 </template>
