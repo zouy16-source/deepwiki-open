@@ -138,15 +138,15 @@ onMounted(generate)
 </script>
 
 <template>
-  <div class="min-h-screen flex flex-col bg-[var(--background)]">
-    <header class="sticky top-0 z-10 bg-[var(--card-bg)] border-b border-[var(--border-color)] shadow-sm">
+  <div class="min-h-screen flex flex-col bg-default">
+    <header class="sticky top-0 z-10 bg-elevated border-b border-default shadow-sm">
       <div class="container mx-auto px-4 py-3 flex items-center justify-between">
         <div class="flex items-center gap-4">
-          <NuxtLink :to="backTo" class="flex items-center text-[var(--foreground)] hover:text-[var(--accent-primary)] transition-colors">
+          <NuxtLink :to="backTo" class="flex items-center text-default hover:text-primary transition-colors">
             <UIcon name="i-fa6-solid-arrow-left" class="mr-2" />
             <span>返回 Wiki</span>
           </NuxtLink>
-          <h1 class="text-xl font-bold text-[var(--accent-primary)]">Workshop: {{ repo }}</h1>
+          <h1 class="text-xl font-bold text-primary">Workshop: {{ repo }}</h1>
         </div>
         <div class="flex items-center gap-2">
           <UButton color="primary" variant="soft" icon="i-fa6-solid-arrows-rotate" :loading="isLoading" square aria-label="Regenerate" @click="generate" />
@@ -157,16 +157,16 @@ onMounted(generate)
 
     <main class="flex-1 container mx-auto px-4 py-6">
       <div v-if="isLoading && !workshopContent" class="flex flex-col items-center justify-center p-8">
-        <div class="w-12 h-12 border-4 border-[var(--accent-primary)]/30 border-t-[var(--accent-primary)] rounded-full animate-spin mb-4" />
-        <p class="text-[var(--foreground)]">{{ loadingMessage }}</p>
+        <div class="w-12 h-12 border-4 border-primary/30 border-t-primary rounded-full animate-spin mb-4" />
+        <p class="text-default">{{ loadingMessage }}</p>
       </div>
       <UAlert v-else-if="error" color="error" variant="soft" title="Error" :description="error" />
-      <div v-else class="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-lg shadow-sm p-6">
+      <div v-else class="bg-elevated border border-default rounded-lg shadow-sm p-6">
         <UAlert v-if="exportError" color="error" variant="soft" class="mb-4" :description="exportError" />
         <Suspense>
           <Markdown :content="workshopContent" />
           <template #fallback>
-            <div class="p-8 text-center text-[var(--muted)] text-sm">…</div>
+            <div class="p-8 text-center text-muted text-sm">…</div>
           </template>
         </Suspense>
       </div>

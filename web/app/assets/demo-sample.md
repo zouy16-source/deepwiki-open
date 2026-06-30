@@ -89,7 +89,7 @@ Inline citation with derived href (empty link target): Sources: [src/app/[owner]
 
 ## Raw HTML (rehype-raw equivalent)
 
-<div style="padding:0.5rem 0.75rem;border:1px dashed var(--accent-secondary);border-radius:0.375rem;">
+<div style="padding:0.5rem 0.75rem;border:1px dashed var(--ui-secondary);border-radius:0.375rem;">
   This block is raw HTML embedded in the markdown.
 </div>
 

@@ -15,6 +15,27 @@ export default defineNuxtConfig({
     '@pinia/nuxt',
   ],
 
+  // Markdown is rendered with @nuxtjs/mdc, which @nuxt/ui wires up (Shiki highlight
+  // + the Prose* components) when `ui.mdc` is on.
+  ui: { mdc: true },
+  mdc: {
+    highlight: {
+      langs: [
+        'javascript', 'typescript', 'jsx', 'tsx', 'vue', 'python', 'bash', 'shell',
+        'json', 'jsonc', 'yaml', 'markdown', 'html', 'css', 'scss', 'go', 'rust',
+        'java', 'kotlin', 'c', 'cpp', 'csharp', 'php', 'ruby', 'sql', 'toml', 'ini',
+        'dockerfile', 'diff', 'xml',
+      ],
+    },
+    // KaTeX math (remark-math parses $…$, rehype-katex renders it).
+    remarkPlugins: { 'remark-math': {} },
+    rehypePlugins: {
+      'rehype-katex': {},
+      // Open external links (incl. resolved source-file citations) in a new tab.
+      'rehype-external-links': { options: { target: '_blank', rel: ['noopener', 'noreferrer'] } },
+    },
+  },
+
   // main.css imports both `tailwindcss` and `@nuxt/ui`; then the ported globals
   // (CSS vars + custom classes), the render-pipeline styles (shiki/code chrome)
   // and KaTeX.

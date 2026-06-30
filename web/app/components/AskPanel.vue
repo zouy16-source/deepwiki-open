@@ -68,16 +68,16 @@ defineExpose({ clearConversation })
 
 <template>
   <div class="flex flex-col">
-    <div v-if="history.length" class="max-h-72 overflow-y-auto px-4 pt-3 space-y-3 border-b border-[var(--border-color)]">
+    <div v-if="history.length" class="max-h-72 overflow-y-auto px-4 pt-3 space-y-3 border-b border-default">
       <div v-for="(m, i) in history" :key="i">
-        <div v-if="m.role === 'user'" class="text-sm font-medium text-[var(--accent-primary)]">
+        <div v-if="m.role === 'user'" class="text-sm font-medium text-primary">
           {{ m.content }}
         </div>
         <div v-else class="text-sm">
-          <span v-if="!m.content" class="text-[var(--muted)]">…</span>
+          <span v-if="!m.content" class="text-muted">…</span>
           <Suspense v-else>
             <Markdown :content="m.content" />
-            <template #fallback><span class="text-[var(--muted)]">…</span></template>
+            <template #fallback><span class="text-muted">…</span></template>
           </Suspense>
         </div>
       </div>
@@ -91,6 +91,7 @@ defineExpose({ clearConversation })
         :placeholder="t('ask.placeholder')"
         :disabled="loading"
         class="flex-1"
+        size="xl"
         :ui="{ root: 'w-full' }"
         @keydown.enter.exact.prevent="ask"
       />
@@ -98,6 +99,7 @@ defineExpose({ clearConversation })
         type="submit"
         color="primary"
         icon="i-fa6-solid-paper-plane"
+        size="xl"
         :loading="loading"
         :label="t('ask.askButton')"
       />
@@ -110,6 +112,7 @@ defineExpose({ clearConversation })
         :disabled="loading"
         :aria-label="t('common.close')"
         @click="clearConversation"
+        size="xl"
       />
     </form>
   </div>

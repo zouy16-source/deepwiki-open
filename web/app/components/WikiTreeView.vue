@@ -27,10 +27,10 @@ const isFlat = computed(
 
 function dotClass(importance: string) {
   return importance === 'high'
-    ? 'bg-[var(--accent-primary)]'
+    ? 'bg-primary'
     : importance === 'medium'
-      ? 'bg-[var(--accent-secondary)]'
-      : 'bg-[var(--highlight)]'
+      ? 'bg-secondary'
+      : 'bg-error'
 }
 </script>
 
@@ -40,8 +40,8 @@ function dotClass(importance: string) {
       <button
         class="w-full text-left px-3 py-2 rounded-md text-sm transition-colors"
         :class="currentPageId === page.id
-          ? 'bg-[var(--accent-primary)]/20 text-[var(--accent-primary)] border border-[var(--accent-primary)]/30'
-          : 'text-[var(--foreground)] hover:bg-[var(--background)] border border-transparent'"
+          ? 'bg-primary/20 text-primary border border-primary/30'
+          : 'text-default hover:bg-default border border-transparent'"
         @click="select(page.id)"
       >
         <div class="flex items-center">

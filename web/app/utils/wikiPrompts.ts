@@ -190,6 +190,7 @@ Based ONLY on the content of the \`[RELEVANT_SOURCE_FILES]\`:
        - Use "graph TD" (top-down) directive for flow diagrams
        - NEVER use "graph LR" (left-right)
        - Maximum node width should be 3-4 words
+       - ALWAYS wrap node/edge labels in double quotes when they contain special characters such as @, /, (), :, or punctuation, e.g. E["@nuxtjs/axios"], N["serial/account"] — unquoted special characters break the Mermaid parser
        - For sequence diagrams:
          - Start with "sequenceDiagram" directive on its own line
          - Define ALL participants at the beginning using "participant" keyword

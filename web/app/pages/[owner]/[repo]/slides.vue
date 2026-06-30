@@ -214,15 +214,15 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen flex flex-col" :class="isFullscreen ? 'fixed inset-0 z-50 bg-[#0d1117]' : 'bg-[var(--background)]'">
-    <header v-if="!isFullscreen" class="sticky top-0 z-10 bg-[var(--card-bg)] border-b border-[var(--border-color)] shadow-sm">
+  <div class="min-h-screen flex flex-col" :class="isFullscreen ? 'fixed inset-0 z-50 bg-[#0d1117]' : 'bg-default'">
+    <header v-if="!isFullscreen" class="sticky top-0 z-10 bg-elevated border-b border-default shadow-sm">
       <div class="container mx-auto px-4 py-3 flex items-center justify-between">
         <div class="flex items-center gap-4">
-          <NuxtLink :to="backTo" class="flex items-center text-[var(--foreground)] hover:text-[var(--accent-primary)] transition-colors">
+          <NuxtLink :to="backTo" class="flex items-center text-default hover:text-primary transition-colors">
             <UIcon name="i-fa6-solid-arrow-left" class="mr-2" />
             <span>返回 Wiki</span>
           </NuxtLink>
-          <h1 class="text-xl font-bold text-[var(--accent-primary)]">Slides: {{ repo }}</h1>
+          <h1 class="text-xl font-bold text-primary">Slides: {{ repo }}</h1>
         </div>
         <div class="flex items-center gap-2">
           <UButton color="primary" variant="soft" icon="i-fa6-solid-arrows-rotate" :loading="isLoading" square aria-label="Regenerate" @click="generate" />
@@ -234,8 +234,8 @@ onMounted(() => {
 
     <main class="flex-1 flex flex-col" :class="isFullscreen ? 'p-0' : 'container mx-auto px-4 py-6'">
       <div v-if="isLoading && !slides.length" class="flex flex-col items-center justify-center p-8 flex-grow">
-        <div class="w-12 h-12 border-4 border-[var(--accent-primary)]/30 border-t-[var(--accent-primary)] rounded-full animate-spin mb-4" />
-        <p class="text-[var(--foreground)]">{{ loadingMessage }}</p>
+        <div class="w-12 h-12 border-4 border-primary/30 border-t-primary rounded-full animate-spin mb-4" />
+        <p class="text-default">{{ loadingMessage }}</p>
       </div>
 
       <UAlert v-else-if="error" color="error" variant="soft" title="Error" :description="error" />
@@ -243,7 +243,7 @@ onMounted(() => {
       <div v-else-if="slides.length" class="flex flex-col flex-grow">
         <div
           class="flex-grow flex flex-col items-center justify-center"
-          :class="isFullscreen ? 'p-0 bg-[#0d1117]' : 'bg-[var(--card-bg)] border border-[var(--border-color)] rounded-lg shadow-sm p-6 mb-4'"
+          :class="isFullscreen ? 'p-0 bg-[#0d1117]' : 'bg-elevated border border-default rounded-lg shadow-sm p-6 mb-4'"
         >
           <UAlert v-if="exportError" color="error" variant="soft" class="mb-4 w-full" :description="exportError" />
           <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
@@ -255,14 +255,14 @@ onMounted(() => {
 
         <div class="flex items-center justify-between" :class="isFullscreen ? 'fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#0d1117]/80 px-6 py-3 rounded-full z-10 shadow-lg' : 'mt-4'">
           <UButton color="primary" variant="soft" icon="i-fa6-solid-arrow-left" :disabled="currentSlideIndex === 0" square aria-label="Previous" @click="prevSlide" />
-          <div class="text-[var(--foreground)]" :class="isFullscreen ? 'mx-4' : ''">Slide {{ currentSlideIndex + 1 }} / {{ slides.length }}</div>
+          <div class="text-default" :class="isFullscreen ? 'mx-4' : ''">Slide {{ currentSlideIndex + 1 }} / {{ slides.length }}</div>
           <UButton color="primary" variant="soft" icon="i-fa6-solid-arrow-right" :disabled="currentSlideIndex === slides.length - 1" square aria-label="Next" @click="nextSlide" />
           <UButton v-if="isFullscreen" class="ml-4" color="primary" variant="soft" icon="i-fa6-solid-xmark" square aria-label="Exit fullscreen" @click="toggleFullscreen" />
         </div>
       </div>
 
       <div v-else class="flex flex-col items-center justify-center p-8 flex-grow">
-        <p class="text-[var(--foreground)]">No slides generated yet. Click regenerate to generate slides.</p>
+        <p class="text-default">No slides generated yet. Click regenerate to generate slides.</p>
       </div>
     </main>
   </div>

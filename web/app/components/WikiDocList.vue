@@ -13,8 +13,6 @@ interface WikiDoc {
   language: string
 }
 
-const emit = defineEmits<{ view: [doc: WikiDoc] }>()
-
 const config = useRuntimeConfig()
 const gitlabBase = config.public.gitlabBase || 'https://gitlab.com'
 const toast = useToast()
@@ -24,6 +22,11 @@ function sourceUrl(d: WikiDoc): string {
   if (t.includes('github')) return `https://github.com/${d.owner}/${d.repo}`
   if (t.includes('bitbucket')) return `https://bitbucket.org/${d.owner}/${d.repo}`
   return `${gitlabBase}/${d.owner}/${d.repo}`
+}
+
+// Route to the wiki detail page (same URL the iframe used to load).
+function wikiHref(d: WikiDoc): string {
+  return `/${d.owner}/${d.repo}?type=${d.repo_type}&language=${d.language}`
 }
 
 const docs = ref<WikiDoc[]>([])
@@ -105,8 +108,8 @@ async function confirmDelete() {
 </script>
 
 <template>
-  <div>
-    <form class="mb-4" @submit.prevent="submitSearch">
+  <div class="flex flex-col h-full min-h-0 p-4 sm:p-6">
+    <form class="mb-4 shrink-0" @submit.prevent="submitSearch">
       <UInput
         v-model="searchInput"
         icon="i-lucide-search"
@@ -116,14 +119,15 @@ async function confirmDelete() {
       />
     </form>
 
-    <p v-if="error" class="mb-4 text-sm text-error">加载出错:{{ error }}</p>
+    <p v-if="error" class="mb-4 shrink-0 text-sm text-error">加载出错:{{ error }}</p>
 
     <UTable
       :data="rows"
       :columns="columns"
       :loading="loading"
       :empty="'暂无已生成的 wiki 文档'"
-      class="border border-default rounded-lg"
+      :sticky="true"
+      class="flex-1 min-h-0 border border-default rounded-lg"
     >
       <template #path-cell="{ row }">
         <a :href="sourceUrl(row.original)" target="_blank" rel="noopener noreferrer" class="font-mono text-primary hover:underline">
@@ -145,7 +149,7 @@ async function confirmDelete() {
 
       <template #actions-cell="{ row }">
         <div class="flex justify-end gap-2">
-          <UButton color="primary" variant="solid" size="xs" icon="i-lucide-eye" label="查看" @click="emit('view', row.original)" />
+          <UButton :to="wikiHref(row.original)" color="primary" variant="solid" size="xs" icon="i-lucide-eye" label="查看" />
           <UButton color="error" variant="outline" size="xs" icon="i-lucide-trash-2" label="删除" @click="askDelete(row.original)" />
         </div>
       </template>

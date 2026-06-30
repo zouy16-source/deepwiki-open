@@ -3,15 +3,15 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <div class="h-screen flex flex-col bg-[var(--background)] text-[var(--foreground)]">
+  <div class="h-screen flex flex-col bg-default text-default">
     <header
-      class="flex items-center justify-between px-6 py-3 border-b border-[var(--border-color)] bg-[var(--card-bg)] shadow-custom"
+      class="flex items-center justify-between px-6 py-3 border-b border-default bg-elevated shadow-lg"
     >
       <div class="flex items-center gap-3">
-        <div class="bg-[var(--accent-primary)] p-2 rounded-lg">
+        <div class="bg-primary p-2 rounded-lg">
           <Icon name="fa6-brands:wikipedia-w" class="text-xl text-white" />
         </div>
-        <h1 class="text-lg font-bold text-[var(--accent-primary)]">
+        <h1 class="text-lg font-bold text-primary">
           {{ t('common.appName') }}
         </h1>
       </div>

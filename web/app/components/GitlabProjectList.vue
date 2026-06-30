@@ -113,8 +113,8 @@ const columns: TableColumn<Row>[] = [
 </script>
 
 <template>
-  <div>
-    <form class="mb-4" @submit.prevent="submitSearch">
+  <div class="flex flex-col h-full min-h-0 p-4 sm:p-6">
+    <form class="mb-4 shrink-0" @submit.prevent="submitSearch">
       <UInput
         v-model="searchInput"
         icon="i-lucide-search"
@@ -124,14 +124,15 @@ const columns: TableColumn<Row>[] = [
       />
     </form>
 
-    <p v-if="error" class="mb-4 text-sm text-error">加载出错:{{ error }}</p>
+    <p v-if="error" class="mb-4 shrink-0 text-sm text-error">加载出错:{{ error }}</p>
 
     <UTable
       :data="rows"
       :columns="columns"
       :loading="loading"
       :empty="'没有仓库'"
-      class="border border-default rounded-lg"
+      :sticky="true"
+      class="flex-1 min-h-0 border border-default rounded-lg"
     >
       <template #path-cell="{ row }">
         <a
@@ -166,7 +167,7 @@ const columns: TableColumn<Row>[] = [
       </template>
     </UTable>
 
-    <div v-if="!query" class="flex items-center justify-end gap-3 mt-4 text-sm text-muted">
+    <div v-if="!query" class="flex items-center justify-end gap-3 mt-4 shrink-0 text-sm text-muted">
       <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-chevron-left" :disabled="page <= 1 || loading" label="上一页" @click="page = Math.max(1, page - 1)" />
       <span>第 {{ page }} 页</span>
       <UButton color="neutral" variant="ghost" size="sm" trailing-icon="i-lucide-chevron-right" :disabled="!nextPage || loading" label="下一页" @click="page = page + 1" />

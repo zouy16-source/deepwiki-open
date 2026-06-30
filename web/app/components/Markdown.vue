@@ -1,59 +1,87 @@
 <script setup lang="ts">
-import { getMarkdownIt, splitMarkdownSegments, type ResolveFileHref } from '~/composables/useMarkdownRenderer'
-
-// Ported from src/components/Markdown.tsx.
+// Renders LLM-generated markdown via @nuxtjs/mdc → Nuxt UI Prose components
+// (ProsePre code blocks with Shiki, ProseTable, KaTeX math). Two extras:
+//  • ```mermaid fences are split out and rendered with <Mermaid> (diagram), and
+//  • "Relevant source files" / inline-citation links are resolved to source URLs
+//    by rewriting the markdown before MDC parses it (keeps Nuxt UI's ProseA).
 const props = defineProps<{
   content: string
-  /** Turn a bare repo file path into a full source URL for citation links. */
-  resolveFileHref?: ResolveFileHref
+  resolveFileHref?: (path: string) => string
 }>()
 
-// Built once (shiki highlighter is expensive). Nuxt wraps pages in <Suspense>,
-// so awaiting in setup is fine and lets markdown segments render during SSR.
-const md = await getMarkdownIt()
-
-const rendered = computed(() =>
-  splitMarkdownSegments(md, props.content).map((seg) =>
-    seg.type === 'mermaid'
-      ? { type: 'mermaid' as const, chart: seg.chart || '' }
-      : { type: 'markdown' as const, html: md.render(seg.src || '', { resolveFileHref: props.resolveFileHref }) },
-  ),
-)
-
-// Copy buttons live inside v-html output, so wire them with event delegation.
-const copied = ref(false)
-async function onClick(e: MouseEvent) {
-  const btn = (e.target as HTMLElement)?.closest?.('.copy-btn')
-  if (!btn) return
-  const block = btn.closest('.code-block')
-  const code = block?.querySelector('.shiki')?.textContent ?? block?.querySelector('code')?.textContent ?? ''
-  try {
-    await navigator.clipboard.writeText(code)
-    copied.value = true
-    btn.classList.add('copied')
-    setTimeout(() => { copied.value = false; btn.classList.remove('copied') }, 1200)
-  } catch {
-    // clipboard blocked (e.g. insecure context) — ignore
-  }
+// --- citation link resolution (ported from the old markdown-it renderer) ---
+function isBareFilePath(href: string): boolean {
+  if (!href) return false
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false // has a scheme
+  if (/^[/#?]/.test(href)) return false // absolute / anchor / query
+  return /\.[a-z0-9]{1,8}(#.*)?$/i.test(href) // ends in a file extension
 }
+function citationHref(text: string, resolve: (p: string) => string): string | null {
+  const t = text.trim()
+  const m = t.match(/^(.+?\.[a-z0-9]{1,8}):(\d+)(?:-(\d+))?$/i)
+  if (m) {
+    const base = resolve(m[1])
+    if (!base || base === m[1]) return null
+    const anchor = base.includes('/-/blob/')
+      ? `#L${m[2]}${m[3] ? `-${m[3]}` : ''}`
+      : `#L${m[2]}${m[3] ? `-L${m[3]}` : ''}`
+    return base + anchor
+  }
+  if (isBareFilePath(t)) {
+    const base = resolve(t)
+    return base && base !== t ? base : null
+  }
+  return null
+}
+function resolveCitations(md: string): string {
+  const resolve = props.resolveFileHref
+  if (!resolve) return md
+  // [text](href) — skip images (preceded by '!').
+  return md.replace(/(?<!!)\[([^\]]*)\]\(([^)]*)\)/g, (full, text: string, href: string) => {
+    let finalHref = href
+    if (href && isBareFilePath(href)) finalHref = resolve(href)
+    else if (!href) finalHref = citationHref(text, resolve) || ''
+    return finalHref && finalHref !== href ? `[${text}](${finalHref})` : full
+  })
+}
+
+interface Segment { type: 'markdown' | 'mermaid'; value: string }
+
+const segments = computed<Segment[]>(() => {
+  const content = props.content || ''
+  const out: Segment[] = []
+  const re = /```mermaid[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```/g
+  let last = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(content)) !== null) {
+    if (m.index > last) {
+      const md = content.slice(last, m.index)
+      if (md.trim()) out.push({ type: 'markdown', value: resolveCitations(md) })
+    }
+    out.push({ type: 'mermaid', value: m[1] })
+    last = re.lastIndex
+  }
+  if (last < content.length) {
+    const md = content.slice(last)
+    if (md.trim()) out.push({ type: 'markdown', value: resolveCitations(md) })
+  }
+  if (!out.length) out.push({ type: 'markdown', value: resolveCitations(content) })
+  return out
+})
 </script>
 
 <template>
-  <div class="markdown-body max-w-none px-2 py-4" @click="onClick">
-    <template v-for="(seg, i) in rendered" :key="i">
-      <div
-        v-if="seg.type === 'mermaid'"
-        class="my-8 bg-gray-50 dark:bg-gray-800 rounded-md overflow-hidden shadow-sm"
-      >
+  <div class="markdown-body max-w-none">
+    <template v-for="(seg, i) in segments" :key="i">
+      <div v-if="seg.type === 'mermaid'" class="my-6 bg-muted/40 rounded-md overflow-hidden">
         <ClientOnly>
-          <Mermaid :chart="seg.chart" class-name="w-full max-w-full" :zooming-enabled="false" />
+          <Mermaid :chart="seg.value" class-name="w-full max-w-full" :zooming-enabled="false" />
           <template #fallback>
-            <div class="flex justify-center items-center p-6 text-xs text-[var(--muted)]">图表加载中...</div>
+            <div class="flex justify-center items-center p-6 text-xs text-muted">图表加载中...</div>
           </template>
         </ClientOnly>
       </div>
-      <!-- eslint-disable-next-line vue/no-v-html -->
-      <div v-else v-html="seg.html" />
+      <MDC v-else :value="seg.value" />
     </template>
   </div>
 </template>

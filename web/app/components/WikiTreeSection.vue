@@ -20,18 +20,18 @@ function pageFor(id: string) {
 }
 function dotClass(importance: string) {
   return importance === 'high'
-    ? 'bg-[var(--accent-primary)]'
+    ? 'bg-primary'
     : importance === 'medium'
-      ? 'bg-[var(--accent-secondary)]'
-      : 'bg-[var(--highlight)]'
+      ? 'bg-secondary'
+      : 'bg-error'
 }
 </script>
 
 <template>
   <div v-if="section" class="mb-2">
     <button
-      class="flex items-center w-full text-left px-2 py-1.5 rounded-md text-sm font-medium text-[var(--foreground)] hover:bg-[var(--background)]/70 transition-colors"
-      :class="level === 0 ? 'bg-[var(--background)]/50' : ''"
+      class="flex items-center w-full text-left px-2 py-1.5 rounded-md text-sm font-medium text-default hover:bg-default/70 transition-colors"
+      :class="level === 0 ? 'bg-default/50' : ''"
       @click="toggle(sectionId)"
     >
       <UIcon :name="isExpanded ? 'i-fa6-solid-chevron-down' : 'i-fa6-solid-chevron-right'" class="mr-2 text-xs" />
@@ -41,15 +41,15 @@ function dotClass(importance: string) {
     <div
       v-if="isExpanded"
       class="ml-4 mt-1 space-y-1"
-      :class="level > 0 ? 'pl-2 border-l border-[var(--border-color)]/30' : ''"
+      :class="level > 0 ? 'pl-2 border-l border-default/30' : ''"
     >
       <template v-for="pid in section.pages" :key="pid">
         <button
           v-if="pageFor(pid)"
           class="w-full text-left px-3 py-1.5 rounded-md text-sm transition-colors"
           :class="currentPageId === pid
-            ? 'bg-[var(--accent-primary)]/20 text-[var(--accent-primary)] border border-[var(--accent-primary)]/30'
-            : 'text-[var(--foreground)] hover:bg-[var(--background)] border border-transparent'"
+            ? 'bg-primary/20 text-primary border border-primary/30'
+            : 'text-default hover:bg-default border border-transparent'"
           @click="select(pid)"
         >
           <div class="flex items-center">
