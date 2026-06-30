@@ -20,10 +20,10 @@ function pageFor(id: string) {
 }
 function dotClass(importance: string) {
   return importance === 'high'
-    ? 'bg-primary'
+    ? 'bg-primary/20'
     : importance === 'medium'
-      ? 'bg-secondary'
-      : 'bg-error'
+      ? 'bg-secondary/20'
+      : 'bg-error/20'
 }
 </script>
 
