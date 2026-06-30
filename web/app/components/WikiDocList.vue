@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// Ported from src/components/WikiDocList.tsx.
-// Generated-wiki list (search + table), data from /api/wiki/projects.
-// Delete confirmation uses a UModal + useToast instead of confirm()/alert().
+// Generated-wiki list using Nuxt UI UTable. Data from /api/wiki/projects.
+// Delete confirmation uses a UModal + useToast.
+import type { TableColumn } from '@nuxt/ui'
 
 interface WikiDoc {
   id: string
@@ -65,6 +65,14 @@ const rows = computed(() => {
   )
 })
 
+const columns: TableColumn<WikiDoc>[] = [
+  { accessorKey: 'path', header: '仓库路径' },
+  { accessorKey: 'type', header: '类型' },
+  { accessorKey: 'language', header: '语言' },
+  { accessorKey: 'time', header: '生成时间' },
+  { id: 'actions', header: '操作', meta: { class: { th: 'text-right', td: 'text-right' } } },
+]
+
 // Delete confirmation modal state.
 const confirmOpen = ref(false)
 const pending = ref<WikiDoc | null>(null)
@@ -101,52 +109,47 @@ async function confirmDelete() {
     <form class="mb-4" @submit.prevent="submitSearch">
       <UInput
         v-model="searchInput"
-        icon="i-fa6-solid-magnifying-glass"
+        icon="i-lucide-search"
         size="lg"
         placeholder="搜索已生成文档(名称、路径或类型),回车搜索…"
-        :ui="{ root: 'w-full' }"
+        class="w-full"
       />
     </form>
 
-    <p v-if="error" class="mb-4 text-sm text-[var(--highlight)]">加载出错:{{ error }}</p>
+    <p v-if="error" class="mb-4 text-sm text-error">加载出错:{{ error }}</p>
 
-    <div class="overflow-x-auto border border-[var(--border-color)] rounded-lg">
-      <table class="min-w-full text-sm">
-        <thead class="bg-[var(--background)] text-left text-[var(--muted)]">
-          <tr>
-            <th class="px-4 py-3 font-medium">仓库路径</th>
-            <th class="px-4 py-3 font-medium">类型</th>
-            <th class="px-4 py-3 font-medium">语言</th>
-            <th class="px-4 py-3 font-medium">生成时间</th>
-            <th class="px-4 py-3 font-medium text-right">操作</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-[var(--border-color)]">
-          <tr v-if="loading">
-            <td colspan="5" class="px-4 py-8 text-center text-[var(--muted)]">加载中…</td>
-          </tr>
-          <tr v-else-if="rows.length === 0">
-            <td colspan="5" class="px-4 py-8 text-center text-[var(--muted)]">暂无已生成的 wiki 文档</td>
-          </tr>
-          <template v-else>
-            <tr v-for="d in rows" :key="d.id" class="hover:bg-[var(--card-bg)] align-top">
-              <td class="px-4 py-3 font-mono">
-                <a :href="sourceUrl(d)" target="_blank" rel="noopener noreferrer" class="text-[var(--link-color)] hover:underline">{{ d.owner }}/{{ d.repo }}</a>
-              </td>
-              <td class="px-4 py-3">
-                <UBadge color="primary" variant="soft" size="sm" :label="d.repo_type" />
-              </td>
-              <td class="px-4 py-3 text-[var(--muted)]">{{ d.language }}</td>
-              <td class="px-4 py-3 text-[var(--muted)] whitespace-nowrap">{{ new Date(d.submittedAt).toLocaleString() }}</td>
-              <td class="px-4 py-3 text-right whitespace-nowrap">
-                <UButton color="primary" variant="solid" size="xs" label="查看" @click="emit('view', d)" />
-                <UButton class="ml-2" color="error" variant="outline" size="xs" label="删除" @click="askDelete(d)" />
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
+    <UTable
+      :data="rows"
+      :columns="columns"
+      :loading="loading"
+      :empty="'暂无已生成的 wiki 文档'"
+      class="border border-default rounded-lg"
+    >
+      <template #path-cell="{ row }">
+        <a :href="sourceUrl(row.original)" target="_blank" rel="noopener noreferrer" class="font-mono text-primary hover:underline">
+          {{ row.original.owner }}/{{ row.original.repo }}
+        </a>
+      </template>
+
+      <template #type-cell="{ row }">
+        <UBadge color="primary" variant="soft" size="sm" :label="row.original.repo_type" />
+      </template>
+
+      <template #language-cell="{ row }">
+        <span class="text-muted">{{ row.original.language }}</span>
+      </template>
+
+      <template #time-cell="{ row }">
+        <span class="text-muted whitespace-nowrap">{{ new Date(row.original.submittedAt).toLocaleString() }}</span>
+      </template>
+
+      <template #actions-cell="{ row }">
+        <div class="flex justify-end gap-2">
+          <UButton color="primary" variant="solid" size="xs" icon="i-lucide-eye" label="查看" @click="emit('view', row.original)" />
+          <UButton color="error" variant="outline" size="xs" icon="i-lucide-trash-2" label="删除" @click="askDelete(row.original)" />
+        </div>
+      </template>
+    </UTable>
 
     <UModal v-model:open="confirmOpen" title="确认删除" :description="pending ? `确定删除「${pending.name}」的 wiki 吗？此操作不可撤销。` : ''">
       <template #footer>

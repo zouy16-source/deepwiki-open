@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// Ported from src/components/GitlabProjectList.tsx.
-// GitLab repo list: search + table + status + pagination, consuming the BFF
-// (/api/gitlab/projects, /api/wiki/projects). @nuxt/ui for input/button/badge.
+// GitLab repo list using Nuxt UI UTable (search + table + status + pagination),
+// consuming the BFF (/api/gitlab/projects, /api/wiki/projects).
+import type { TableColumn } from '@nuxt/ui'
 
 interface GitlabProject {
   pathWithNamespace: string
@@ -15,6 +15,15 @@ interface ProcessedProject {
   owner: string
   repo: string
   repo_type: string
+}
+interface Row {
+  p: GitlabProject
+  owner: string
+  repo: string
+  isGenerated: boolean
+  viewHref: string
+  genHref: string
+  nested: boolean
 }
 
 function splitRepo(pathWithNamespace: string): { owner: string; repo: string } {
@@ -76,7 +85,7 @@ onMounted(() => {
   watch([query, page], loadProjects, { immediate: true })
 })
 
-const rows = computed(() =>
+const rows = computed<Row[]>(() =>
   projects.value.map((p) => {
     const { owner, repo } = splitRepo(p.pathWithNamespace)
     const isGenerated = generated.value.has(p.pathWithNamespace.toLowerCase())
@@ -93,6 +102,14 @@ const rows = computed(() =>
     return { p, owner, repo, isGenerated, viewHref, genHref, nested }
   }),
 )
+
+const columns: TableColumn<Row>[] = [
+  { accessorKey: 'path', header: '仓库路径' },
+  { accessorKey: 'description', header: '仓库介绍' },
+  { accessorKey: 'branch', header: '默认分支' },
+  { accessorKey: 'status', header: '状态' },
+  { id: 'actions', header: '操作', meta: { class: { th: 'text-right', td: 'text-right' } } },
+]
 </script>
 
 <template>
@@ -100,60 +117,59 @@ const rows = computed(() =>
     <form class="mb-4" @submit.prevent="submitSearch">
       <UInput
         v-model="searchInput"
-        icon="i-fa6-solid-magnifying-glass"
+        icon="i-lucide-search"
         size="lg"
         placeholder="搜索仓库(名称、路径或介绍),回车搜索…"
-        :ui="{ root: 'w-full' }"
+        class="w-full"
       />
     </form>
 
-    <p v-if="error" class="mb-4 text-sm text-[var(--highlight)]">加载出错:{{ error }}</p>
+    <p v-if="error" class="mb-4 text-sm text-error">加载出错:{{ error }}</p>
 
-    <div class="overflow-x-auto border border-[var(--border-color)] rounded-lg">
-      <table class="min-w-full text-sm">
-        <thead class="bg-[var(--background)] text-left text-[var(--muted)]">
-          <tr>
-            <th class="px-4 py-3 font-medium">仓库路径</th>
-            <th class="px-4 py-3 font-medium">仓库介绍</th>
-            <th class="px-4 py-3 font-medium">默认分支</th>
-            <th class="px-4 py-3 font-medium">状态</th>
-            <th class="px-4 py-3 font-medium text-right">操作</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-[var(--border-color)]">
-          <tr v-if="loading">
-            <td colspan="5" class="px-4 py-8 text-center text-[var(--muted)]">加载中…</td>
-          </tr>
-          <tr v-else-if="rows.length === 0">
-            <td colspan="5" class="px-4 py-8 text-center text-[var(--muted)]">没有仓库</td>
-          </tr>
-          <template v-else>
-            <tr v-for="r in rows" :key="r.p.pathWithNamespace" class="hover:bg-[var(--card-bg)] align-top">
-              <td class="px-4 py-3 font-mono">
-                <a v-if="r.p.webUrl" :href="r.p.webUrl" target="_blank" rel="noopener noreferrer" class="text-[var(--link-color)] hover:underline">{{ r.p.pathWithNamespace }}</a>
-                <span v-else class="text-[var(--foreground)]">{{ r.p.pathWithNamespace }}</span>
-              </td>
-              <td class="px-4 py-3 text-[var(--muted)] max-w-xs truncate" :title="r.p.description || ''">{{ r.p.description || '—' }}</td>
-              <td class="px-4 py-3 text-[var(--muted)]">{{ r.p.defaultBranch || '—' }}</td>
-              <td class="px-4 py-3">
-                <UBadge v-if="r.isGenerated" color="success" variant="soft" size="sm" label="已生成" />
-                <UBadge v-else color="neutral" variant="outline" size="sm" label="未生成" />
-              </td>
-              <td class="px-4 py-3 text-right whitespace-nowrap">
-                <span v-if="r.nested" class="text-xs text-[var(--muted)]" title="deepwiki 路由暂不支持多层嵌套组">嵌套组暂不支持</span>
-                <UButton v-else-if="r.isGenerated" :to="r.viewHref" color="primary" variant="solid" size="xs" label="查看" />
-                <UButton v-else :to="r.genHref" color="primary" variant="outline" size="xs" label="生成" />
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
+    <UTable
+      :data="rows"
+      :columns="columns"
+      :loading="loading"
+      :empty="'没有仓库'"
+      class="border border-default rounded-lg"
+    >
+      <template #path-cell="{ row }">
+        <a
+          v-if="row.original.p.webUrl"
+          :href="row.original.p.webUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="font-mono text-primary hover:underline"
+        >{{ row.original.p.pathWithNamespace }}</a>
+        <span v-else class="font-mono">{{ row.original.p.pathWithNamespace }}</span>
+      </template>
 
-    <div v-if="!query" class="flex items-center justify-end gap-3 mt-4 text-sm text-[var(--muted)]">
-      <UButton color="neutral" variant="ghost" size="sm" :disabled="page <= 1 || loading" label="← 上一页" @click="page = Math.max(1, page - 1)" />
+      <template #description-cell="{ row }">
+        <span class="text-muted line-clamp-1 max-w-xs block" :title="row.original.p.description || ''">
+          {{ row.original.p.description || '—' }}
+        </span>
+      </template>
+
+      <template #branch-cell="{ row }">
+        <span class="text-muted">{{ row.original.p.defaultBranch || '—' }}</span>
+      </template>
+
+      <template #status-cell="{ row }">
+        <UBadge v-if="row.original.isGenerated" color="success" variant="soft" size="sm" label="已生成" />
+        <UBadge v-else color="neutral" variant="outline" size="sm" label="未生成" />
+      </template>
+
+      <template #actions-cell="{ row }">
+        <span v-if="row.original.nested" class="text-xs text-muted" title="deepwiki 路由暂不支持多层嵌套组">嵌套组暂不支持</span>
+        <UButton v-else-if="row.original.isGenerated" :to="row.original.viewHref" color="primary" variant="solid" size="xs" label="查看" />
+        <UButton v-else :to="row.original.genHref" color="primary" variant="outline" size="xs" label="生成" />
+      </template>
+    </UTable>
+
+    <div v-if="!query" class="flex items-center justify-end gap-3 mt-4 text-sm text-muted">
+      <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-chevron-left" :disabled="page <= 1 || loading" label="上一页" @click="page = Math.max(1, page - 1)" />
       <span>第 {{ page }} 页</span>
-      <UButton color="neutral" variant="ghost" size="sm" :disabled="!nextPage || loading" label="下一页 →" @click="page = page + 1" />
+      <UButton color="neutral" variant="ghost" size="sm" trailing-icon="i-lucide-chevron-right" :disabled="!nextPage || loading" label="下一页" @click="page = page + 1" />
     </div>
   </div>
 </template>
