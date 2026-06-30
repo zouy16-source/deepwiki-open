@@ -1,0 +1,37 @@
+{
+  "name": "deepwiki-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev --port 3001",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "@nuxt/icon": "^2.2.5",
+    "@nuxt/ui": "^4.9.0",
+    "@nuxtjs/color-mode": "^4.0.1",
+    "@nuxtjs/i18n": "^10.4.0",
+    "@pinia/nuxt": "^0.11.3",
+    "@vscode/markdown-it-katex": "^1.1.2",
+    "katex": "^0.17.0",
+    "markdown-it": "^14.2.0",
+    "mermaid": "^11.16.0",
+    "nuxt": "^4.4.8",
+    "pinia": "^3.0.4",
+    "shiki": "^4.3.0",
+    "svg-pan-zoom": "^3.6.2",
+    "vue": "^3.5.0",
+    "vue-router": "^4.4.0"
+  },
+  "devDependencies": {
+    "@iconify-json/fa6-brands": "^1.2.6",
+    "@iconify-json/fa6-solid": "^1.2.4",
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/markdown-it": "^14.1.2",
+    "tailwindcss": "^4.3.2"
+  }
+}

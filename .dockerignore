@@ -3,15 +3,12 @@
 .gitignore
 .github
 
-# Node.js
+# Frontend is a separate app (web/, Nuxt) — not part of the backend image
+web
 node_modules
 npm-debug.log
 yarn-debug.log
 yarn-error.log
-
-# Next.js
-.next
-out
 
 # Python cache files (but keep api/ directory)
 __pycache__/
