@@ -102,7 +102,7 @@ onMounted(loadData)
     <main class="flex-1 w-full overflow-hidden">
       <!-- Loading -->
       <div v-if="isLoading" class="h-full flex items-center justify-center p-8">
-        <div class="flex flex-col items-center justify-center p-8 bg-elevated rounded-lg shadow-lg bg-elevated">
+        <div class="flex flex-col items-center justify-center p-8 rounded-lg shadow-lg">
           <div class="relative mb-6">
             <div class="absolute -inset-4 bg-primary/10 rounded-full blur-md animate-pulse" />
             <div class="relative flex items-center justify-center">
@@ -146,7 +146,7 @@ onMounted(loadData)
       </div>
 
       <!-- Wiki view -->
-      <div v-else-if="wikiStructure" class="h-full flex flex-col bg-elevated overflow-hidden">
+      <div v-else-if="wikiStructure" class="h-full flex flex-col overflow-hidden">
         <!-- Top toolbar: breadcrumb + repo + wiki type + export -->
         <div class="flex items-center gap-x-3 gap-y-1.5 px-4 sm:px-5 py-2 border-b border-default shrink-0 flex-wrap">
           <UBreadcrumb :items="breadcrumbItems" />
