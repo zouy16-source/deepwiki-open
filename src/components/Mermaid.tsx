@@ -22,11 +22,11 @@ mermaid.initialize({
     /* Japanese aesthetic styles for all diagrams */
     .node rect, .node circle, .node ellipse, .node polygon, .node path {
       fill: #f8f4e6;
-      stroke: #d7c4bb;
+      stroke: var(--accent-secondary);
       stroke-width: 1px;
     }
     .edgePath .path {
-      stroke: #9b7cb9;
+      stroke: var(--accent-primary);
       stroke-width: 1.5px;
     }
     .edgeLabel {
@@ -41,14 +41,14 @@ mermaid.initialize({
     }
     .cluster rect {
       fill: #f8f4e6;
-      stroke: #d7c4bb;
+      stroke: var(--accent-secondary);
       stroke-width: 1px;
     }
 
     /* Sequence diagram specific styles */
     .actor {
       fill: #f8f4e6;
-      stroke: #d7c4bb;
+      stroke: var(--accent-secondary);
       stroke-width: 1px;
     }
     text.actor {
@@ -60,7 +60,7 @@ mermaid.initialize({
       stroke: none;
     }
     .messageLine0, .messageLine1 {
-      stroke: #9b7cb9;
+      stroke: var(--accent-primary);
     }
     .noteText {
       fill: #333333;
@@ -76,7 +76,7 @@ mermaid.initialize({
       stroke: #5d4037;
     }
     [data-theme="dark"] .edgePath .path {
-      stroke: #9370db;
+      stroke: var(--accent-primary);
     }
     [data-theme="dark"] .edgeLabel {
       background-color: transparent;
@@ -90,7 +90,7 @@ mermaid.initialize({
       stroke: #5d4037;
     }
     [data-theme="dark"] .flowchart-link {
-      stroke: #9370db;
+      stroke: var(--accent-primary);
     }
 
     /* Dark mode sequence diagram overrides */
@@ -108,7 +108,7 @@ mermaid.initialize({
       font-weight: 500;
     }
     [data-theme="dark"] .messageLine0, [data-theme="dark"] .messageLine1 {
-      stroke: #9370db;
+      stroke: var(--accent-primary);
       stroke-width: 1.5px;
     }
     [data-theme="dark"] .noteText {

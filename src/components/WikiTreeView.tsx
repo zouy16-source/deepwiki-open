@@ -107,10 +107,10 @@ const WikiTreeView: React.FC<WikiTreeViewProps> = ({
                     <div
                       className={`w-2 h-2 rounded-full mr-2 flex-shrink-0 ${
                         page.importance === 'high'
-                          ? 'bg-[#9b7cb9]'
+                          ? 'bg-[var(--accent-primary)]'
                           : page.importance === 'medium'
-                          ? 'bg-[#d7c4bb]'
-                          : 'bg-[#e8927c]'
+                          ? 'bg-[var(--accent-secondary)]'
+                          : 'bg-[var(--highlight)]'
                       }`}
                     ></div>
                     <span className="truncate">{page.title}</span>
@@ -148,10 +148,10 @@ const WikiTreeView: React.FC<WikiTreeViewProps> = ({
                 <div
                   className={`w-2 h-2 rounded-full mr-2 flex-shrink-0 ${
                     page.importance === 'high'
-                      ? 'bg-[#9b7cb9]'
+                      ? 'bg-[var(--accent-primary)]'
                       : page.importance === 'medium'
-                      ? 'bg-[#d7c4bb]'
-                      : 'bg-[#e8927c]'
+                      ? 'bg-[var(--accent-secondary)]'
+                      : 'bg-[var(--highlight)]'
                   }`}
                 ></div>
                 <span className="truncate">{page.title}</span>

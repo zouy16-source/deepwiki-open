@@ -5,7 +5,8 @@ import remarkMath from 'remark-math';
 import rehypeRaw from 'rehype-raw';
 import rehypeKatex from 'rehype-katex';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { tomorrow } from 'react-syntax-highlighter/dist/cjs/styles/prism';
+import { vscDarkPlus, vs } from 'react-syntax-highlighter/dist/cjs/styles/prism';
+import { useTheme } from 'next-themes';
 import Mermaid from './Mermaid';
 import 'katex/dist/katex.min.css';
 
@@ -14,6 +15,12 @@ interface MarkdownProps {
 }
 
 const Markdown: React.FC<MarkdownProps> = ({ content }) => {
+  // Match the code-highlight theme to the current light/dark theme.
+  const { resolvedTheme } = useTheme();
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
+  const codeStyle = mounted && resolvedTheme === 'light' ? vs : vscDarkPlus;
+
   // Define markdown components
   const MarkdownComponents: React.ComponentProps<typeof ReactMarkdown>['components'] = {
     p({ children, ...props }: { children?: React.ReactNode }) {
@@ -33,7 +40,7 @@ const Markdown: React.FC<MarkdownProps> = ({ content }) => {
                 text.includes('Thought') ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300' :
                 text.includes('Action') ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300' :
                 text.includes('Observation') ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300' :
-                text.includes('Answer') ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300' :
+                text.includes('Answer') ? 'bg-teal-100 dark:bg-teal-900/30 text-teal-800 dark:text-teal-300' :
                 'dark:text-white'
               }`}
               {...props}
@@ -64,7 +71,7 @@ const Markdown: React.FC<MarkdownProps> = ({ content }) => {
       return (
         <a
           href={href}
-          className="text-purple-600 dark:text-purple-400 hover:underline font-medium"
+          className="text-[var(--link-color)] hover:underline font-medium"
           target="_blank"
           rel="noopener noreferrer"
           {...props}
@@ -169,7 +176,7 @@ const Markdown: React.FC<MarkdownProps> = ({ content }) => {
             </div>
             <SyntaxHighlighter
               language={match[1]}
-              style={tomorrow}
+              style={codeStyle}
               className="!text-sm"
               customStyle={{ margin: 0, borderRadius: '0 0 0.375rem 0.375rem', padding: '1rem' }}
               showLineNumbers={true}
@@ -186,7 +193,7 @@ const Markdown: React.FC<MarkdownProps> = ({ content }) => {
       // Handle inline code
       return (
         <code
-          className={`${className} font-mono bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded text-pink-500 dark:text-pink-400 text-sm`}
+          className={`${className} font-mono bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded text-[var(--accent-secondary)] text-sm`}
           {...otherProps}
         >
           {children}

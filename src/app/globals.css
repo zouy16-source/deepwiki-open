@@ -4,31 +4,31 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 :root {
-  /* Japanese aesthetic color palette - light mode */
-  --background: #f8f4e6; /* Warm off-white like washi paper */
-  --foreground: #333333; /* Soft black for text */
-  --shadow-color: rgba(0, 0, 0, 0.05);
-  --accent-primary: #9b7cb9; /* Soft purple (Fuji) */
-  --accent-secondary: #d7c4bb; /* Soft beige (Kinari) */
-  --border-color: #e0d8c8; /* Soft beige border */
-  --card-bg: #fffaf0; /* Slightly warmer than background */
-  --highlight: #e8927c; /* Soft coral (Akane) */
-  --muted: #a59e8c; /* Soft gray-brown (Nezumi) */
-  --link-color: #7c5aa0; /* Slightly darker purple for links */
+  /* VSCode Light+ palette */
+  --background: #ffffff; /* Editor background */
+  --foreground: #1f1f1f; /* Editor foreground */
+  --shadow-color: rgba(0, 0, 0, 0.08);
+  --accent-primary: #005fb8; /* VSCode blue */
+  --accent-secondary: #267f99; /* Teal */
+  --border-color: #e5e5e5; /* Panel border */
+  --card-bg: #f3f3f3; /* Sidebar background */
+  --highlight: #d16969; /* Error/warning red */
+  --muted: #6e6e6e; /* Muted gray */
+  --link-color: #0066b8; /* Link blue */
 }
 
 html[data-theme='dark'] {
-  /* Japanese aesthetic color palette - dark mode */
-  --background: #1a1a1a; /* Deep charcoal */
-  --foreground: #f0f0f0; /* Soft white */
-  --shadow-color: rgba(0, 0, 0, 0.2);
-  --accent-primary: #9370db; /* Soft lavender */
-  --accent-secondary: #5d4037; /* Warm brown */
-  --border-color: #2c2c2c; /* Dark border */
-  --card-bg: #222222; /* Slightly lighter than background */
-  --highlight: #e57373; /* Soft red */
-  --muted: #8c8c8c; /* Muted gray */
-  --link-color: #b19cd9; /* Lighter purple for dark mode links */
+  /* VSCode Dark+ palette */
+  --background: #1e1e1e; /* Editor background */
+  --foreground: #d4d4d4; /* Editor foreground */
+  --shadow-color: rgba(0, 0, 0, 0.4);
+  --accent-primary: #569cd6; /* VSCode blue */
+  --accent-secondary: #4ec9b0; /* Teal */
+  --border-color: #3c3c3c; /* Panel border */
+  --card-bg: #252526; /* Sidebar background */
+  --highlight: #f48771; /* Error/warning coral */
+  --muted: #858585; /* Muted gray */
+  --link-color: #4daafc; /* Link blue */
 }
 
 /* Fix for unreadable <select> options in Chrome's dark mode */

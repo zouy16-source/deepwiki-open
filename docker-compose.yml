@@ -5,7 +5,9 @@ services:
       dockerfile: Dockerfile
     ports:
       - "${PORT:-8001}:${PORT:-8001}"  # API port
-      - "3000:3000"  # Next.js port
+    # Backend-only: the frontend runs on the host via `npm run dev` (http://localhost:3001).
+    # To restore the all-in-one container, re-add `- "3000:3000"` above and delete this `command:`.
+    command: ["python", "-m", "api.main", "--port", "8001"]
     env_file:
       - .env
     environment:
