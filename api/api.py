@@ -56,6 +56,7 @@ class ProcessedProjectEntry(BaseModel):
     repo_type: str # Renamed from type to repo_type for clarity with existing models
     submittedAt: int # Timestamp
     language: str # Extracted from filename
+    repo_url: Optional[str] = None # Real repo URL (read from the cache file)
 
 class RepoInfo(BaseModel):
     owner: str
@@ -537,6 +538,81 @@ async def delete_wiki_cache(
         logger.warning(f"Wiki cache not found, cannot delete: {cache_path}")
         raise HTTPException(status_code=404, detail="Wiki cache not found")
 
+# --- Wiki Generation Job System --- (background tasks; see docs/wiki-jobs-api.md)
+from api.wiki_jobs import JobManager, GenerateRequest, make_fake_runner, JobKey
+
+
+def _wiki_cache_exists(key: JobKey) -> bool:
+    """A wiki is 'already generated' if its cache file exists. Cache identity is
+    (repo_type, owner, repo, language) — comprehensive is not part of the file name."""
+    return os.path.exists(get_wiki_cache_path(key.owner, key.repo, key.repo_type, key.language))
+
+
+# Step 1 wires the fake runner (walks every phase with sleeps). The real pipeline,
+# ported from the frontend orchestration, replaces `runner=` later — the endpoints
+# and state machine stay unchanged.
+wiki_job_manager = JobManager(
+    max_concurrent=int(os.environ.get("MAX_CONCURRENT_JOBS", "3")),
+    cache_exists=_wiki_cache_exists,
+    runner=make_fake_runner(),
+    page_retries=1,
+)
+
+
+def _check_job_auth(authorization_code: Optional[str]) -> None:
+    if WIKI_AUTH_MODE and (not authorization_code or WIKI_AUTH_CODE != authorization_code):
+        raise HTTPException(status_code=401, detail="Authorization code is invalid")
+
+
+@app.post("/api/wiki/generate")
+async def start_wiki_generation(
+    request_data: GenerateRequest,
+    response: Response,
+    authorization_code: Optional[str] = Query(None, description="Authorization code"),
+):
+    """Start (or join) a background wiki-generation job. Returns immediately.
+
+    202 = a new job was started; 200 = joined an in-flight job or the wiki is
+    already cached (dedup / cache-hit, see docs §2.1)."""
+    _check_job_auth(authorization_code)
+    job, created = await wiki_job_manager.submit(request_data)
+    response.status_code = 202 if created else 200
+    return job.view()
+
+
+@app.get("/api/wiki/jobs")
+async def list_wiki_jobs(
+    status: Optional[str] = Query(None, description="Comma-separated status filter, e.g. queued,running"),
+    owner: Optional[str] = Query(None, description="Filter by owner"),
+    repo: Optional[str] = Query(None, description="Filter by repo"),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """List generation jobs (active + recently finished within TTL). For list polling."""
+    return wiki_job_manager.list_view(status=status, owner=owner, repo=repo, limit=limit)
+
+
+@app.get("/api/wiki/jobs/{job_id}")
+async def get_wiki_job(job_id: str):
+    """Single job detail (for the detail page / focused polling)."""
+    job = wiki_job_manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job.view()
+
+
+@app.delete("/api/wiki/jobs/{job_id}")
+async def cancel_wiki_job(
+    job_id: str,
+    authorization_code: Optional[str] = Query(None, description="Authorization code"),
+):
+    """Cancel a queued/running job."""
+    _check_job_auth(authorization_code)
+    job = await wiki_job_manager.cancel(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job.view()
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Docker and monitoring"""
@@ -739,6 +815,18 @@ async def get_processed_projects():
                         language = parts[-1] # language is the last part
                         repo = "_".join(parts[2:-1]) # repo can contain underscores
 
+                        # Read the real repo URL from the cache file. owner/repo above
+                        # may be a flattened nested-group path (underscores), so the
+                        # frontend uses this to build correct source links.
+                        def _read_repo_url(p):
+                            with open(p, 'r', encoding='utf-8') as f:
+                                data = json.load(f)
+                            return data.get('repo_url') or (data.get('repo') or {}).get('repoUrl')
+                        try:
+                            repo_url = await asyncio.to_thread(_read_repo_url, file_path)
+                        except Exception:
+                            repo_url = None
+
                         project_entries.append(
                             ProcessedProjectEntry(
                                 id=filename,
@@ -747,7 +835,8 @@ async def get_processed_projects():
                                 name=f"{owner}/{repo}",
                                 repo_type=repo_type,
                                 submittedAt=int(stats.st_mtime * 1000), # Convert to milliseconds
-                                language=language
+                                language=language,
+                                repo_url=repo_url
                             )
                         )
                     else:

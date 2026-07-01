@@ -23,12 +23,16 @@ interface Row {
   isGenerated: boolean
   viewHref: string
   genHref: string
-  nested: boolean
 }
 
+// Flatten a (possibly nested-group) GitLab path into a route- and cache-safe
+// owner/repo pair: owner = first segment, repo = the rest joined with '_'. The
+// backend cache filename recombines underscore parts back into `repo`, so this
+// round-trips through save/load/processed_projects. The real URL is carried
+// separately via repo_url (genHref) / the cached repo info.
 function splitRepo(pathWithNamespace: string): { owner: string; repo: string } {
   const parts = pathWithNamespace.split('/')
-  return { owner: parts[0] || '', repo: parts.slice(1).join('/') }
+  return { owner: parts[0] || '', repo: parts.slice(1).join('_') }
 }
 
 const searchInput = ref('')
@@ -88,7 +92,8 @@ onMounted(() => {
 const rows = computed<Row[]>(() =>
   projects.value.map((p) => {
     const { owner, repo } = splitRepo(p.pathWithNamespace)
-    const isGenerated = generated.value.has(p.pathWithNamespace.toLowerCase())
+    // Compare against the same flattened owner/repo key the backend stores.
+    const isGenerated = generated.value.has(`${owner}/${repo}`.toLowerCase())
     const repoUrl = p.webUrl || ''
     const viewHref = `/${owner}/${repo}?type=gitlab&language=zh`
     const genParams = new URLSearchParams()
@@ -98,8 +103,7 @@ const rows = computed<Row[]>(() =>
     genParams.append('model', 'qwen-plus')
     genParams.append('language', 'zh')
     const genHref = `/${owner}/${repo}?${genParams.toString()}`
-    const nested = repo.includes('/')
-    return { p, owner, repo, isGenerated, viewHref, genHref, nested }
+    return { p, owner, repo, isGenerated, viewHref, genHref }
   }),
 )
 
@@ -161,8 +165,7 @@ const columns: TableColumn<Row>[] = [
       </template>
 
       <template #actions-cell="{ row }">
-        <span v-if="row.original.nested" class="text-xs text-muted" title="deepwiki 路由暂不支持多层嵌套组">嵌套组暂不支持</span>
-        <UButton v-else-if="row.original.isGenerated" :to="row.original.viewHref" color="primary" variant="solid" size="xs" label="查看" />
+        <UButton v-if="row.original.isGenerated" :to="row.original.viewHref" color="primary" variant="solid" size="xs" label="查看" />
         <UButton v-else :to="row.original.genHref" color="primary" variant="outline" size="xs" label="生成" />
       </template>
     </UTable>

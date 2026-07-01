@@ -11,6 +11,7 @@ interface WikiDoc {
   repo_type: string
   submittedAt: number
   language: string
+  repo_url?: string
 }
 
 const config = useRuntimeConfig()
@@ -18,6 +19,9 @@ const gitlabBase = config.public.gitlabBase || 'https://gitlab.com'
 const toast = useToast()
 
 function sourceUrl(d: WikiDoc): string {
+  // Prefer the stored real URL — owner/repo can be a flattened nested-group path
+  // ('_' joined), which can't be reconstructed back into the real URL.
+  if (d.repo_url) return d.repo_url.replace(/^http:\/\//i, 'https://')
   const t = (d.repo_type || '').toLowerCase()
   if (t.includes('github')) return `https://github.com/${d.owner}/${d.repo}`
   if (t.includes('bitbucket')) return `https://bitbucket.org/${d.owner}/${d.repo}`
