@@ -102,5 +102,9 @@ export default defineNuxtConfig({
     '/api/wiki_cache/**': { proxy: `${SERVER_BASE_URL}/api/wiki_cache/**` },
     '/export/wiki/**': { proxy: `${SERVER_BASE_URL}/export/wiki/**` },
     '/local_repo/structure': { proxy: `${SERVER_BASE_URL}/local_repo/structure` },
+    // Wiki generation job system (background tasks; see docs/wiki-jobs-api.md).
+    '/api/wiki/generate': { proxy: `${SERVER_BASE_URL}/api/wiki/generate` },
+    '/api/wiki/jobs': { proxy: `${SERVER_BASE_URL}/api/wiki/jobs` },
+    '/api/wiki/jobs/**': { proxy: `${SERVER_BASE_URL}/api/wiki/jobs/**` },
   },
 })

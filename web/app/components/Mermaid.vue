@@ -91,17 +91,30 @@ function ensureMermaid(): Promise<typeof mermaidType> {
 }
 
 // Quote node/edge labels that contain '@' (e.g. "@nuxtjs/axios", decorators).
-// Mermaid v11 treats '@' as special (node-metadata syntax) and rejects it unquoted,
-// which is a very common artifact in LLM-generated diagrams. Already-quoted labels
-// are left untouched.
+// LLM-generated diagrams routinely put characters Mermaid v11 rejects in unquoted
+// labels — '@' (node-metadata syntax), and in edge/node labels things like
+// '(' ':' '/' "'" (e.g. |request(url: '/x')| or [Key: Value]). Quote any label that
+// holds a char beyond word/space and a few tolerated marks (. , -). Already-quoted
+// labels are left untouched.
 function quoteSpecialLabels(src: string): string {
-  const q = (open: string, label: string, close: string) =>
-    label.includes('"') ? open + label + close : `${open}"${label}"${close}`
-  return src
-    .replace(/(\[)([^[\]"\n|]*@[^[\]"\n|]*?)(\])/g, (_m, o, l, c) => q(o, l, c)) // [label]
-    .replace(/(\()([^()"\n|]*@[^()"\n|]*?)(\))/g, (_m, o, l, c) => q(o, l, c)) // (label)
-    .replace(/(\{)([^{}"\n|]*@[^{}"\n|]*?)(\})/g, (_m, o, l, c) => q(o, l, c)) // {label}
-    .replace(/(\|)([^"\n|]*@[^"\n|]*?)(\|)/g, (_m, o, l, c) => q(o, l, c)) // |edge label|
+  // \x00 (mask byte, below) counts as safe so masked already-quoted labels aren't re-quoted.
+  const UNSAFE = /[^\w\s.,\-\x00]/
+  // 1) Edge (pipe) labels first: quote the whole |...| label when unsafe.
+  let s = src.replace(/(\|)([^"\n|]+?)(\|)/g, (m, o, l, c) =>
+    UNSAFE.test(l) ? `${o}"${l}"${c}` : m)
+  // 2) Mask quoted strings so the node-shape passes below never reach inside them
+  //    (e.g. the parens within an edge label just quoted above).
+  const masks: string[] = []
+  s = s.replace(/"[^"\n]*"/g, (m) => `\x00${masks.push(m) - 1}\x00`)
+  // 3) Node labels: [rect], (round), {diamond}. Masked (already-quoted) labels read
+  //    as safe, so they are left alone.
+  const q = (o: string, l: string, c: string) => (UNSAFE.test(l) ? `${o}"${l}"${c}` : `${o}${l}${c}`)
+  s = s
+    .replace(/(\[)([^[\]"\n|]+?)(\])/g, (_m, o, l, c) => q(o, l, c)) // [label]
+    .replace(/(\()([^()"\n|]+?)(\))/g, (_m, o, l, c) => q(o, l, c)) // (label)
+    .replace(/(\{)([^{}"\n|]+?)(\})/g, (_m, o, l, c) => q(o, l, c)) // {label}
+  // 4) Restore masked strings.
+  return s.replace(/\x00(\d+)\x00/g, (_m, i) => masks[Number(i)] ?? _m)
 }
 
 // Strip artifacts the LLM sometimes appends inside a ```mermaid block (e.g. a

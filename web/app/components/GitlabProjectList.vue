@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// GitLab repo list using Nuxt UI UTable (search + table + status + pagination),
-// consuming the BFF (/api/gitlab/projects, /api/wiki/projects).
+// GitLab repo list using Nuxt UI UTable. «生成» now starts a background job on the
+// backend (POST /api/wiki/generate) instead of navigating to the detail page; the
+// list polls /api/wiki/jobs and shows live progress (phase + bar + ETA) per repo.
 import type { TableColumn } from '@nuxt/ui'
 
 interface GitlabProject {
@@ -16,25 +17,40 @@ interface ProcessedProject {
   repo: string
   repo_type: string
 }
+interface Job {
+  id: string
+  key: { owner: string; repo: string; repo_type: string; language: string; comprehensive: boolean }
+  status: 'queued' | 'running' | 'succeeded' | 'partial' | 'failed' | 'canceled'
+  phase: string | null
+  progress: { percent: number; total_pages: number | null; done_pages: number; failed_pages: number; current_page: string | null }
+  timing: { eta_seconds: number | null; elapsed_seconds: number }
+  queue_position: number | null
+  cache_ready: boolean
+  error: { code: string; message: string } | null
+}
 interface Row {
   p: GitlabProject
   owner: string
   repo: string
   isGenerated: boolean
   viewHref: string
-  genHref: string
+  job?: Job
 }
 
 // Flatten a (possibly nested-group) GitLab path into a route- and cache-safe
 // owner/repo pair: owner = first segment, repo = the rest joined with '_'. The
 // backend cache filename recombines underscore parts back into `repo`, so this
 // round-trips through save/load/processed_projects. The real URL is carried
-// separately via repo_url (genHref) / the cached repo info.
+// separately via repo_url / the cached repo info.
 function splitRepo(pathWithNamespace: string): { owner: string; repo: string } {
   const parts = pathWithNamespace.split('/')
   return { owner: parts[0] || '', repo: parts.slice(1).join('_') }
 }
+function keyOf(owner: string, repo: string) {
+  return `${owner}/${repo}`.toLowerCase()
+}
 
+const toast = useToast()
 const searchInput = ref('')
 const query = ref('')
 const page = ref(1)
@@ -42,8 +58,11 @@ const page = ref(1)
 const projects = ref<GitlabProject[]>([])
 const nextPage = ref<number | null>(null)
 const generated = ref<Set<string>>(new Set())
+const jobs = ref<Map<string, Job>>(new Map())
 const loading = ref(false)
 const error = ref<string | null>(null)
+
+const ACTIVE = ['queued', 'running']
 
 async function loadGenerated() {
   try {
@@ -51,9 +70,7 @@ async function loadGenerated() {
     if (!Array.isArray(data)) return
     const s = new Set<string>()
     for (const p of data) {
-      if ((p.repo_type || '').toLowerCase().includes('gitlab')) {
-        s.add(`${p.owner}/${p.repo}`.toLowerCase())
-      }
+      if ((p.repo_type || '').toLowerCase().includes('gitlab')) s.add(keyOf(p.owner, p.repo))
     }
     generated.value = s
   } catch {
@@ -79,6 +96,78 @@ async function loadProjects() {
   }
 }
 
+// --- job polling ---
+// Fast cadence while a job is active, a slow heartbeat when idle (so jobs started
+// elsewhere / after a refresh still surface without a full remount).
+let pollTimer: ReturnType<typeof setInterval> | null = null
+let pollInterval = 0
+
+function schedulePoll(ms: number) {
+  if (pollTimer && pollInterval === ms) return
+  stopPolling()
+  pollInterval = ms
+  pollTimer = setInterval(fetchJobs, ms)
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; pollInterval = 0 }
+}
+
+async function fetchJobs() {
+  try {
+    const data = await $fetch<{ jobs: Job[] }>('/api/wiki/jobs')
+    const m = new Map<string, Job>()
+    const g = new Set(generated.value)
+    for (const j of data.jobs || []) {
+      const k = keyOf(j.key.owner, j.key.repo)
+      m.set(k, j)
+      if (j.cache_ready) g.add(k) // persists past the job's TTL
+    }
+    jobs.value = m
+    generated.value = g
+    schedulePoll((data.jobs || []).some((j) => ACTIVE.includes(j.status)) ? 2500 : 10000)
+  } catch {
+    /* best-effort */
+  }
+}
+function ensurePolling() {
+  if (!pollTimer) schedulePoll(2500)
+}
+
+async function startGen(row: Row, force = false) {
+  try {
+    const job = await $fetch<Job>('/api/wiki/generate', {
+      method: 'POST',
+      body: {
+        owner: row.owner,
+        repo: row.repo,
+        repo_type: 'gitlab',
+        language: 'zh',
+        comprehensive: true,
+        repo_url: row.p.webUrl || '',
+        provider: 'openai',
+        model: 'qwen-plus',
+        force,
+      },
+    })
+    const m = new Map(jobs.value)
+    m.set(keyOf(row.owner, row.repo), job)
+    jobs.value = m
+    if (job.cache_ready) generated.value = new Set(generated.value).add(keyOf(row.owner, row.repo))
+    ensurePolling()
+  } catch (e) {
+    toast.add({ title: '启动生成失败', description: e instanceof Error ? e.message : String(e), color: 'error' })
+  }
+}
+
+async function cancelGen(row: Row) {
+  const j = jobs.value.get(keyOf(row.owner, row.repo))
+  if (!j) return
+  try {
+    await $fetch(`/api/wiki/jobs/${j.id}`, { method: 'DELETE' })
+  } catch { /* ignore */ }
+  await fetchJobs()
+}
+
 function submitSearch() {
   page.value = 1
   query.value = searchInput.value.trim()
@@ -86,24 +175,19 @@ function submitSearch() {
 
 onMounted(() => {
   loadGenerated()
+  fetchJobs()
   watch([query, page], loadProjects, { immediate: true })
 })
+onBeforeUnmount(stopPolling)
 
 const rows = computed<Row[]>(() =>
   projects.value.map((p) => {
     const { owner, repo } = splitRepo(p.pathWithNamespace)
-    // Compare against the same flattened owner/repo key the backend stores.
-    const isGenerated = generated.value.has(`${owner}/${repo}`.toLowerCase())
-    const repoUrl = p.webUrl || ''
+    const k = keyOf(owner, repo)
+    const job = jobs.value.get(k)
+    const isGenerated = generated.value.has(k) || !!job?.cache_ready
     const viewHref = `/${owner}/${repo}?type=gitlab&language=zh`
-    const genParams = new URLSearchParams()
-    genParams.append('type', 'gitlab')
-    genParams.append('repo_url', encodeURIComponent(repoUrl))
-    genParams.append('provider', 'openai')
-    genParams.append('model', 'qwen-plus')
-    genParams.append('language', 'zh')
-    const genHref = `/${owner}/${repo}?${genParams.toString()}`
-    return { p, owner, repo, isGenerated, viewHref, genHref }
+    return { p, owner, repo, isGenerated, viewHref, job }
   }),
 )
 
@@ -111,9 +195,31 @@ const columns: TableColumn<Row>[] = [
   { accessorKey: 'path', header: '仓库路径' },
   { accessorKey: 'description', header: '仓库介绍' },
   { accessorKey: 'branch', header: '默认分支' },
-  { accessorKey: 'status', header: '状态' },
+  { accessorKey: 'status', header: '状态', meta: { class: { th: 'w-52', td: 'w-52' } } },
   { id: 'actions', header: '操作', meta: { class: { th: 'text-right', td: 'text-right' } } },
 ]
+
+const PHASE_LABEL: Record<string, string> = {
+  fetching_repo: '拉取仓库',
+  indexing: '索引中',
+  planning: '规划结构',
+  generating: '生成页面',
+  saving: '保存中',
+}
+function isActive(job?: Job) {
+  return !!job && ACTIVE.includes(job.status)
+}
+function statusText(job: Job): string {
+  if (job.status === 'queued') return job.queue_position ? `排队中 (第 ${job.queue_position} 位)` : '排队中'
+  return PHASE_LABEL[job.phase || ''] || '生成中'
+}
+function fmtEta(s: number | null): string {
+  if (s == null) return ''
+  if (s < 60) return `约 ${s}s`
+  const m = Math.floor(s / 60)
+  const sec = s % 60
+  return sec ? `约 ${m}m${sec}s` : `约 ${m}m`
+}
 </script>
 
 <template>
@@ -160,13 +266,50 @@ const columns: TableColumn<Row>[] = [
       </template>
 
       <template #status-cell="{ row }">
-        <UBadge v-if="row.original.isGenerated" color="success" variant="soft" size="sm" label="已生成" />
+        <div v-if="isActive(row.original.job)" class="min-w-[10rem]">
+          <div class="flex items-center justify-between text-xs mb-1">
+            <span class="text-primary truncate">{{ statusText(row.original.job!) }}</span>
+            <span class="text-muted shrink-0 ml-2">{{ row.original.job!.progress.percent }}%</span>
+          </div>
+          <div class="h-1.5 bg-muted rounded-full overflow-hidden">
+            <div class="h-full bg-primary rounded-full transition-all duration-500" :style="{ width: `${row.original.job!.progress.percent}%` }" />
+          </div>
+          <div class="flex items-center justify-between text-[11px] text-muted mt-1 h-4">
+            <span v-if="row.original.job!.phase === 'generating' && row.original.job!.progress.total_pages" class="truncate">
+              {{ row.original.job!.progress.done_pages }}/{{ row.original.job!.progress.total_pages }} 页
+            </span>
+            <span v-else />
+            <span v-if="row.original.job!.timing.eta_seconds != null" class="shrink-0 ml-2">{{ fmtEta(row.original.job!.timing.eta_seconds) }}</span>
+          </div>
+        </div>
+        <UBadge v-else-if="row.original.isGenerated" color="success" variant="soft" size="sm" label="已生成" />
+        <UBadge
+          v-else-if="row.original.job?.status === 'failed'"
+          color="error"
+          variant="soft"
+          size="sm"
+          label="失败"
+          :title="row.original.job?.error?.message || ''"
+        />
         <UBadge v-else color="neutral" variant="outline" size="sm" label="未生成" />
       </template>
 
       <template #actions-cell="{ row }">
-        <UButton v-if="row.original.isGenerated" :to="row.original.viewHref" color="primary" variant="solid" size="xs" label="查看" />
-        <UButton v-else :to="row.original.genHref" color="primary" variant="outline" size="xs" label="生成" />
+        <UButton
+          v-if="isActive(row.original.job)"
+          color="neutral"
+          variant="ghost"
+          size="xs"
+          icon="i-lucide-x"
+          label="取消"
+          @click="cancelGen(row.original)"
+        />
+        <div v-else-if="row.original.isGenerated" class="flex items-center justify-end gap-1">
+          <UButton :to="row.original.viewHref" color="primary" variant="solid" size="xs" label="查看" />
+          <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-rotate-cw" title="重新生成(覆盖)" @click="startGen(row.original, true)" />
+        </div>
+        <UButton v-else-if="row.original.job?.status === 'failed'" color="error" variant="soft" size="xs" label="重试" @click="startGen(row.original)" />
+        <UButton v-else color="primary" variant="outline" size="xs" label="生成" @click="startGen(row.original)" />
       </template>
     </UTable>
 

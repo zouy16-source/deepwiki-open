@@ -540,6 +540,7 @@ async def delete_wiki_cache(
 
 # --- Wiki Generation Job System --- (background tasks; see docs/wiki-jobs-api.md)
 from api.wiki_jobs import JobManager, GenerateRequest, make_fake_runner, JobKey
+from api.wiki_generator import make_real_runner
 
 
 def _wiki_cache_exists(key: JobKey) -> bool:
@@ -548,13 +549,14 @@ def _wiki_cache_exists(key: JobKey) -> bool:
     return os.path.exists(get_wiki_cache_path(key.owner, key.repo, key.repo_type, key.language))
 
 
-# Step 1 wires the fake runner (walks every phase with sleeps). The real pipeline,
-# ported from the frontend orchestration, replaces `runner=` later — the endpoints
-# and state machine stay unchanged.
+# Real pipeline (ported from the frontend orchestration). Set WIKI_JOBS_FAKE=1 to
+# swap in the fake runner (walks phases with sleeps) for state-machine testing.
+_use_fake = os.environ.get("WIKI_JOBS_FAKE", "").lower() in ("1", "true", "t")
+_job_runner = make_fake_runner() if _use_fake else make_real_runner(page_retries=1)
 wiki_job_manager = JobManager(
     max_concurrent=int(os.environ.get("MAX_CONCURRENT_JOBS", "3")),
     cache_exists=_wiki_cache_exists,
-    runner=make_fake_runner(),
+    runner=_job_runner,
     page_retries=1,
 )
 

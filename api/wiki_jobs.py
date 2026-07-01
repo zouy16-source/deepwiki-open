@@ -72,6 +72,7 @@ class GenerateRequest(BaseModel):
     excluded_files: str = ""
     included_dirs: str = ""
     included_files: str = ""
+    max_pages: int = 40  # upper bound on pages in comprehensive mode
     force: bool = False
 
 

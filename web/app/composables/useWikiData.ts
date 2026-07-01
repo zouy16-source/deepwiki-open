@@ -326,6 +326,10 @@ export function useWikiData(opts: WikiDataOptions) {
           else if (cached.repo_url && !effectiveRepoInfo.value.repoUrl) {
             effectiveRepoInfo.value = { ...effectiveRepoInfo.value, repoUrl: cached.repo_url }
           }
+          // Resolve the real default branch BEFORE rendering: citation links are
+          // built at render time by generateFileUrl(), so if we render first the
+          // links bake in the initial 'main' even when the repo uses 'master'.
+          await refreshDefaultBranch()
           const structure: WikiStructure = {
             ...cached.wiki_structure,
             sections: cached.wiki_structure.sections || [],
@@ -338,7 +342,6 @@ export function useWikiData(opts: WikiDataOptions) {
           isLoading.value = false
           loadingMessage.value = undefined
           cacheLoaded = true
-          await refreshDefaultBranch()
           return
         }
       }
