@@ -55,10 +55,16 @@ const searchInput = ref('')
 const query = ref('')
 const page = ref(1)
 
+interface UpdateStatus {
+  status: 'up_to_date' | 'behind' | 'unknown'
+  behind_count?: number | null
+}
+
 const projects = ref<GitlabProject[]>([])
 const nextPage = ref<number | null>(null)
 const generated = ref<Set<string>>(new Set())
 const jobs = ref<Map<string, Job>>(new Map())
+const updateStatus = ref<Map<string, UpdateStatus>>(new Map())
 const loading = ref(false)
 const error = ref<string | null>(null)
 
@@ -76,6 +82,31 @@ async function loadGenerated() {
   } catch {
     /* best-effort */
   }
+}
+
+// Lazily check, for each generated repo on the page, whether its wiki is behind
+// the repo's latest commit (Phase A). Guarded so the job-poll re-renders don't refire.
+const checkingStatus = new Set<string>()
+function checkUpdateStatus() {
+  for (const r of rows.value) {
+    if (!r.isGenerated) continue
+    const k = keyOf(r.owner, r.repo)
+    if (updateStatus.value.has(k) || checkingStatus.has(k)) continue
+    checkingStatus.add(k)
+    $fetch<UpdateStatus>(
+      `/api/wiki/update_status?owner=${encodeURIComponent(r.owner)}&repo=${encodeURIComponent(r.repo)}&repo_type=gitlab&language=zh`,
+    )
+      .then((s) => {
+        const m = new Map(updateStatus.value)
+        m.set(k, { status: s.status, behind_count: s.behind_count })
+        updateStatus.value = m
+      })
+      .catch(() => {})
+      .finally(() => checkingStatus.delete(k))
+  }
+}
+function statusOf(row: Row): UpdateStatus | undefined {
+  return updateStatus.value.get(keyOf(row.owner, row.repo))
 }
 
 async function loadProjects() {
@@ -112,19 +143,31 @@ function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; pollInterval = 0 }
 }
 
+const invalidatedJobs = new Set<string>()
+
 async function fetchJobs() {
   try {
     const data = await $fetch<{ jobs: Job[] }>('/api/wiki/jobs')
     const m = new Map<string, Job>()
     const g = new Set(generated.value)
+    let statusDirty = false
     for (const j of data.jobs || []) {
       const k = keyOf(j.key.owner, j.key.repo)
       m.set(k, j)
-      if (j.cache_ready) g.add(k) // persists past the job's TTL
+      if (j.cache_ready) {
+        g.add(k) // persists past the job's TTL
+        // A (re)generation / incremental update finished — re-check staleness once.
+        if (!invalidatedJobs.has(j.id)) {
+          invalidatedJobs.add(j.id)
+          updateStatus.value.delete(k)
+          statusDirty = true
+        }
+      }
     }
     jobs.value = m
     generated.value = g
     schedulePoll((data.jobs || []).some((j) => ACTIVE.includes(j.status)) ? 2500 : 10000)
+    if (statusDirty) checkUpdateStatus()
   } catch {
     /* best-effort */
   }
@@ -133,7 +176,7 @@ function ensurePolling() {
   if (!pollTimer) schedulePoll(2500)
 }
 
-async function startGen(row: Row, force = false) {
+async function startGen(row: Row, force = false, mode: 'full' | 'incremental' = 'full') {
   try {
     const job = await $fetch<Job>('/api/wiki/generate', {
       method: 'POST',
@@ -146,6 +189,7 @@ async function startGen(row: Row, force = false) {
         repo_url: row.p.webUrl || '',
         provider: 'openai',
         model: 'qwen-plus',
+        mode,
         force,
       },
     })
@@ -177,6 +221,7 @@ onMounted(() => {
   loadGenerated()
   fetchJobs()
   watch([query, page], loadProjects, { immediate: true })
+  watch([generated, projects], checkUpdateStatus)
 })
 onBeforeUnmount(stopPolling)
 
@@ -282,7 +327,17 @@ function fmtEta(s: number | null): string {
             <span v-if="row.original.job!.timing.eta_seconds != null" class="shrink-0 ml-2">{{ fmtEta(row.original.job!.timing.eta_seconds) }}</span>
           </div>
         </div>
-        <UBadge v-else-if="row.original.isGenerated" color="success" variant="soft" size="sm" label="已生成" />
+        <div v-else-if="row.original.isGenerated" class="flex flex-col items-start gap-1">
+          <UBadge color="success" variant="soft" size="sm" label="已生成" />
+          <UBadge
+            v-if="statusOf(row.original)?.status === 'behind'"
+            color="warning"
+            variant="soft"
+            size="xs"
+            :label="`落后 ${statusOf(row.original)?.behind_count ?? '?'} 提交`"
+          />
+          <span v-else-if="statusOf(row.original)?.status === 'up_to_date'" class="text-[11px] text-muted">已是最新</span>
+        </div>
         <UBadge
           v-else-if="row.original.job?.status === 'failed'"
           color="error"
@@ -306,6 +361,16 @@ function fmtEta(s: number | null): string {
         />
         <div v-else-if="row.original.isGenerated" class="flex items-center justify-end gap-1">
           <UButton :to="row.original.viewHref" color="primary" variant="solid" size="xs" label="查看" />
+          <UButton
+            v-if="statusOf(row.original)?.status === 'behind'"
+            color="warning"
+            variant="soft"
+            size="xs"
+            icon="i-lucide-arrow-up-circle"
+            label="增量更新"
+            title="仅重生成受改动影响的页面"
+            @click="startGen(row.original, false, 'incremental')"
+          />
           <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-rotate-cw" title="重新生成(覆盖)" @click="startGen(row.original, true)" />
         </div>
         <UButton v-else-if="row.original.job?.status === 'failed'" color="error" variant="soft" size="xs" label="重试" @click="startGen(row.original)" />

@@ -36,8 +36,19 @@ function citationHref(text: string, resolve: (p: string) => string): string | nu
 function resolveCitations(md: string): string {
   const resolve = props.resolveFileHref
   if (!resolve) return md
+  // LLM often wraps citations in inline-code backticks (copied from the prompt's
+  // format examples) — "Sources: [...]()" or a bare "[file:lines]()" — so MDC renders
+  // them as literal code instead of links. Strip backticks ONLY around spans whose
+  // ENTIRE content is citation(s): an optional "Sources:" prefix + one or more
+  // [text]() links + separators/punctuation. This deliberately does NOT match a code
+  // span's closing backtick paired with the next span's opening backtick around inline
+  // prose (which would merge two legit code spans and swallow a citation).
+  const unwrapped = md.replace(
+    /`(\s*(?:sources?\s*[:：])?\s*(?:\[[^\]]+\]\(\)[\s,，、]*)+[.。]?\s*)`/gi,
+    '$1',
+  )
   // [text](href) — skip images (preceded by '!').
-  return md.replace(/(?<!!)\[([^\]]*)\]\(([^)]*)\)/g, (full, text: string, href: string) => {
+  return unwrapped.replace(/(?<!!)\[([^\]]*)\]\(([^)]*)\)/g, (full, text: string, href: string) => {
     let finalHref = href
     if (href && isBareFilePath(href)) finalHref = resolve(href)
     else if (!href) finalHref = citationHref(text, resolve) || ''
@@ -45,10 +56,27 @@ function resolveCitations(md: string): string {
   })
 }
 
+// Older caches were generated with an English "<details>" template and the LLM
+// sometimes copied a prompt instruction into it. Localize the header/intro and
+// drop the leaked instruction so existing pages read cleanly (new pages are
+// already generated localized).
+function normalizeSourceBlock(md: string): string {
+  return md
+    .replace(/<summary>\s*Relevant source files\s*<\/summary>/gi, '<summary>相关源文件</summary>')
+    .replace(
+      /The following files were used as context for generating this wiki page:/gi,
+      '以下文件用于生成本页面时作为上下文参考:',
+    )
+    .replace(
+      /Remember, do not provide any acknowledgements, disclaimers, apologies, or any other preface before the `?<details>`? block\. JUST START with the `?<details>`? block\.\s*/gi,
+      '',
+    )
+}
+
 interface Segment { type: 'markdown' | 'mermaid'; value: string }
 
 const segments = computed<Segment[]>(() => {
-  const content = props.content || ''
+  const content = normalizeSourceBlock(props.content || '')
   const out: Segment[] = []
   const re = /```mermaid[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```/g
   let last = 0

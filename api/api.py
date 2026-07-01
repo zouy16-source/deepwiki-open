@@ -98,6 +98,9 @@ class WikiCacheData(BaseModel):
     repo: Optional[RepoInfo] = None
     provider: Optional[str] = None
     model: Optional[str] = None
+    commit_id: Optional[str] = None       # git SHA the wiki was generated from
+    default_branch: Optional[str] = None  # branch the commit_id is on
+    generated_at: Optional[int] = None    # unix ms timestamp of generation
 
 class WikiCacheRequest(BaseModel):
     """
@@ -109,6 +112,9 @@ class WikiCacheRequest(BaseModel):
     generated_pages: Dict[str, WikiPage]
     provider: str
     model: str
+    commit_id: Optional[str] = None
+    default_branch: Optional[str] = None
+    generated_at: Optional[int] = None
 
 class WikiExportRequest(BaseModel):
     """
@@ -433,8 +439,12 @@ async def save_wiki_cache(data: WikiCacheRequest) -> bool:
             wiki_structure=data.wiki_structure,
             generated_pages=data.generated_pages,
             repo=data.repo,
+            repo_url=data.repo.repoUrl,
             provider=data.provider,
-            model=data.model
+            model=data.model,
+            commit_id=data.commit_id,
+            default_branch=data.default_branch,
+            generated_at=data.generated_at,
         )
         # Log size of data to be cached for debugging (avoid logging full content if large)
         try:
@@ -613,6 +623,127 @@ async def cancel_wiki_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job.view()
+
+
+def _gitlab_update_status(repo_url: str, cached_commit: str, branch: str, token: str = "") -> dict:
+    """Compare the cached commit against the latest on `branch` via the GitLab
+    compare API. Returns behind_count + changed_files (the latter seeds Phase B)."""
+    import os
+    import requests
+    import urllib3
+    from urllib.parse import urlparse, quote
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    tok = token or os.environ.get("GITLAB_TOKEN", "")
+    headers = {"PRIVATE-TOKEN": tok} if tok else {}
+    parsed = urlparse(repo_url)
+    if parsed.netloc:
+        base = f"https://{parsed.netloc}"
+        project_path = parsed.path.strip("/").replace(".git", "")
+    else:
+        base = (os.environ.get("GITLAB_URL") or "https://gitlab.com").rstrip("/")
+        project_path = repo_url.strip("/").replace(".git", "")
+    api = f"{base}/api/v4/projects/{quote(project_path, safe='')}"
+
+    try:
+        r = requests.get(f"{api}/repository/compare", params={"from": cached_commit, "to": branch},
+                         headers=headers, verify=False, timeout=25)
+        if r.status_code == 200:
+            data = r.json()
+            latest = (data.get("commit") or {}).get("id") or cached_commit
+            behind = len(data.get("commits") or [])
+            return {
+                "status": "up_to_date" if behind == 0 else "behind",
+                "cached_commit": cached_commit,
+                "latest_commit": latest,
+                "behind_count": behind,
+                "changed_files": len(data.get("diffs") or []),
+            }
+        # compare failed (e.g. cached commit was rebased away): fall back to latest tip.
+        c = requests.get(f"{api}/repository/commits", params={"ref_name": branch, "per_page": 1},
+                         headers=headers, verify=False, timeout=25)
+        if c.status_code == 200 and c.json():
+            latest = c.json()[0].get("id")
+            return {"status": "behind" if latest != cached_commit else "up_to_date",
+                    "cached_commit": cached_commit, "latest_commit": latest, "behind_count": None}
+        return {"status": "unknown", "cached_commit": cached_commit, "error": f"compare HTTP {r.status_code}"}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("update_status compare failed for %s: %s", repo_url, e)
+        return {"status": "unknown", "cached_commit": cached_commit, "error": str(e)}
+
+
+@app.get("/api/wiki/update_status")
+async def wiki_update_status(
+    owner: str = Query(...),
+    repo: str = Query(...),
+    repo_type: str = Query(...),
+    language: str = Query(...),
+):
+    """Is the cached wiki behind the repo's latest commit? Compares the stored
+    commit_id against the remote branch tip (see docs/wiki-jobs-api.md — Phase A)."""
+    cached = await read_wiki_cache(owner, repo, repo_type, language)
+    if not cached:
+        raise HTTPException(status_code=404, detail="Wiki cache not found")
+    cached_commit = cached.commit_id
+    branch = cached.default_branch or "main"
+    repo_url = cached.repo_url or (cached.repo.repoUrl if cached.repo else None)
+    if not cached_commit or not repo_url:
+        return {"status": "unknown", "cached_commit": cached_commit,
+                "reason": "cache has no commit_id/repo_url (generated before provenance tracking)"}
+    if repo_type != "gitlab":
+        return {"status": "unknown", "cached_commit": cached_commit, "reason": "only gitlab supported for now"}
+    return _gitlab_update_status(repo_url, cached_commit, branch)
+
+
+def _gitlab_changed_files(repo_url: str, from_sha: str, to_ref: str, token: str = "") -> dict:
+    """Files changed between `from_sha` and `to_ref` via the GitLab compare API.
+    Powers incremental updates (Phase B): changed files -> affected wiki pages."""
+    import os
+    import requests
+    import urllib3
+    from urllib.parse import urlparse, quote
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    tok = token or os.environ.get("GITLAB_TOKEN", "")
+    headers = {"PRIVATE-TOKEN": tok} if tok else {}
+    parsed = urlparse(repo_url)
+    if parsed.netloc:
+        base = f"https://{parsed.netloc}"
+        project_path = parsed.path.strip("/").replace(".git", "")
+    else:
+        base = (os.environ.get("GITLAB_URL") or "https://gitlab.com").rstrip("/")
+        project_path = repo_url.strip("/").replace(".git", "")
+    api = f"{base}/api/v4/projects/{quote(project_path, safe='')}"
+
+    r = requests.get(f"{api}/repository/compare", params={"from": from_sha, "to": to_ref},
+                     headers=headers, verify=False, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    new_sha = (data.get("commit") or {}).get("id") or from_sha
+    changed, added, deleted, renamed = set(), set(), set(), set()
+    for d in data.get("diffs") or []:
+        op, np = d.get("old_path"), d.get("new_path")
+        if d.get("new_file") and np:
+            added.add(np)
+        elif d.get("deleted_file") and op:
+            deleted.add(op)
+        elif d.get("renamed_file"):
+            renamed.update(p for p in (op, np) if p)
+        for p in (op, np):
+            if p:
+                changed.add(p)
+    return {"new_sha": new_sha, "changed": sorted(changed), "added": sorted(added),
+            "deleted": sorted(deleted), "renamed": sorted(renamed)}
+
+
+@app.get("/api/gitlab/compare_files")
+def gitlab_compare_files(repo_url: str, from_sha: str, to_ref: str, token: str = ""):
+    """Changed files between two commits/refs (for incremental wiki updates)."""
+    try:
+        return _gitlab_changed_files(repo_url, from_sha, to_ref, token)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("compare_files failed for %s: %s", repo_url, e)
+        return {"error": str(e), "new_sha": from_sha, "changed": [], "added": [], "deleted": [], "renamed": []}
 
 
 @app.get("/health")

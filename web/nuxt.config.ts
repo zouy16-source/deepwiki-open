@@ -106,5 +106,6 @@ export default defineNuxtConfig({
     '/api/wiki/generate': { proxy: `${SERVER_BASE_URL}/api/wiki/generate` },
     '/api/wiki/jobs': { proxy: `${SERVER_BASE_URL}/api/wiki/jobs` },
     '/api/wiki/jobs/**': { proxy: `${SERVER_BASE_URL}/api/wiki/jobs/**` },
+    '/api/wiki/update_status': { proxy: `${SERVER_BASE_URL}/api/wiki/update_status` },
   },
 })

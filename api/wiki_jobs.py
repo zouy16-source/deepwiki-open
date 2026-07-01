@@ -72,7 +72,11 @@ class GenerateRequest(BaseModel):
     excluded_files: str = ""
     included_dirs: str = ""
     included_files: str = ""
-    max_pages: int = 40  # upper bound on pages in comprehensive mode
+    max_pages: int = 40  # upper bound on total pages in comprehensive mode
+    plan_mode: str = "auto"  # "single" | "two_phase" | "auto" (auto: comprehensive => two_phase)
+    max_modules: int = 40  # two-phase: upper bound on discovered modules
+    max_pages_per_module: int = 3  # two-phase: upper bound on pages per module
+    mode: str = "full"  # "full" | "incremental" (incremental: diff old commit -> regen affected pages)
     force: bool = False
 
 
@@ -251,8 +255,9 @@ class JobManager:
         if existing and existing.is_active() and not req.force:
             return existing, False
 
-        # already cached (and not forcing) -> synthetic succeeded job
-        if not req.force and self._cache_exists(key):
+        # already cached -> synthetic succeeded job. Skipped for force (regenerate)
+        # and incremental (which REQUIRES the existing cache and updates it in place).
+        if not req.force and req.mode != "incremental" and self._cache_exists(key):
             return self._synthetic_cached(req, key), False
 
         # force: cancel any active job for this key first
