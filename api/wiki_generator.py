@@ -645,6 +645,60 @@ async def _maybe_repair_flow(client, base, req, page, content: str) -> str:
     return content
 
 
+# --- glossary coverage enforcement -------------------------------------------
+# "Cover all terms" in the prompt is a soft constraint; measure coverage against the
+# harvested term list and, when too low, issue ONE append-only repair call listing the
+# missing terms. Accept only if coverage actually improves and nothing was dropped.
+_GLOSSARY_COVERAGE_MIN = float(os.environ.get("WIKI_GLOSSARY_COVERAGE_MIN", "0.7"))
+
+
+def _glossary_coverage(content: str, labels: list) -> Tuple[float, list]:
+    if not labels:
+        return 1.0, []
+    missing = [s for s in labels if s not in content]
+    return 1 - len(missing) / len(labels), missing
+
+
+def build_glossary_append_prompt(content: str, missing: list) -> str:
+    miss = "\n".join(f"- {s}" for s in missing)
+    return f"""下面这份术语表遗漏了一批业务词条。请把缺失词条补充进对应的领域分组表格中（没有合适分组就新建一个中文分组），然后返回补充后的完整页面。
+
+缺失词条（每一条都必须补入某个表格；同义/序号变体可合并为一条并在“术语”列写明）：
+{miss}
+
+规则：
+- 保持原有内容、结构、`<details>` 块和 `Sources:` 引用完全不变 — 只做“追加”，不得删改已有条目。
+- 新增行沿用表格列：术语 | 英文/缩写 | 定义 | 所属模块。
+- 全部使用中文。直接输出完整 Markdown 页面，不要额外说明，也不要用代码块包裹整页。
+
+<page_to_fix>
+{content}
+</page_to_fix>"""
+
+
+async def _maybe_repair_glossary(client, base, req, page, content: str, extra_context: str) -> str:
+    if normalize_page_type(page.get("type", "feature")) != "glossary":
+        return content
+    labels = _labels_from_extra_context(extra_context)
+    cov, missing = _glossary_coverage(content, labels)
+    if cov >= _GLOSSARY_COVERAGE_MIN or len(missing) < 10:
+        return content
+    logger.info("glossary coverage %.0f%% (%d/%d missing) — issuing append repair",
+                cov * 100, len(missing), len(labels))
+    try:
+        fixed = _strip_md_fence(await stream_chat(
+            client, base, req, build_glossary_append_prompt(content, missing[:300])))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("glossary repair failed: %s", e)
+        return content
+    new_cov, _ = _glossary_coverage(fixed, labels)
+    if fixed.strip() and new_cov > cov and len(fixed) >= len(content):
+        logger.info("glossary repair raised coverage %.0f%% -> %.0f%%", cov * 100, new_cov * 100)
+        return fixed
+    logger.info("glossary repair did not improve coverage; keeping original")
+    return content
+
+
 async def _gen_page(client, base, req, page, default_branch, retries: int, extra_context: str = "",
                     instruction: str = "") -> Tuple[str, bool]:
     file_paths_list = "\n".join(
@@ -658,6 +712,7 @@ async def _gen_page(client, base, req, page, default_branch, retries: int, extra
             content = _strip_md_fence(await stream_chat(client, base, req, prompt))
             if content.strip():
                 content = await _maybe_repair_flow(client, base, req, page, content)
+                content = await _maybe_repair_glossary(client, base, req, page, content, extra_context)
                 return content, True
             last_err = "empty response"
         except Exception as e:  # noqa: BLE001
@@ -1380,20 +1435,119 @@ def _collect_i18n_labels(clone_dir: str, file_tree: str, limit: int = 500) -> li
     return out
 
 
+# Many internal repos have NO locale files at all — there the Chinese UI strings live
+# directly in source (label/title/placeholder props, el-table columns, const maps).
+# Harvest those as glossary terms, ranked by frequency.
+_CODE_LABEL_RE = re.compile(
+    r"""["'](?:label|title|placeholder|text|name|tab|column|tooltip)["']?\s*[:=]\s*["']([^"'\n]{2,24})["']"""
+    r"""|(?:label|title|placeholder|text|tab|tooltip)\s*[:=]\s*["']([^"'\n]{2,24})["']""",
+)
+_HAN2_RE = re.compile(r"[一-鿿].*[一-鿿]")  # at least 2 Chinese chars
+_CODE_EXTS = (".vue", ".js", ".ts", ".jsx", ".tsx")
+_SKIP_DIRS = {"node_modules", "dist", ".git", ".nuxt", "vendor", "__pycache__", "static", "assets"}
+
+
+def _collect_code_labels(clone_dir: str, limit: int = 500) -> list:
+    """Extract Chinese UI strings (labels/titles/placeholders/const-map values) from
+    source files, most-frequent first. The term source for repos without i18n files."""
+    if not clone_dir or not os.path.isdir(clone_dir):
+        return []
+    from collections import Counter
+    counts: Counter = Counter()
+    scanned = 0
+    for dirpath, dirnames, filenames in os.walk(clone_dir):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        for fn in filenames:
+            if not fn.lower().endswith(_CODE_EXTS):
+                continue
+            scanned += 1
+            if scanned > 3000:  # safety valve on huge repos
+                break
+            try:
+                with open(os.path.join(dirpath, fn), "r", encoding="utf-8", errors="ignore") as f:
+                    src = f.read(400_000)
+            except Exception:  # noqa: BLE001
+                continue
+            for m in _CODE_LABEL_RE.finditer(src):
+                s = (m.group(1) or m.group(2) or "").strip()
+                if s and _HAN2_RE.search(s):
+                    counts[s] += 1
+    return [s for s, _ in counts.most_common(limit)]
+
+
+# Fixed header for the term list inside the glossary extra-context. The coverage
+# repair below parses the "- term" lines back out of it, so keep them in sync.
+_GLOSSARY_LABELS_HEADER = "业务词条清单（来自界面代码与语言包，权威来源 — 术语表必须覆盖全部）："
+
+
 def build_glossary_context(clone_dir: str, file_tree: str, structure: dict,
-                           max_labels: int = 500) -> str:
+                           max_labels: int = 800) -> str:
     """Authoritative term sources for the glossary page: the full module/page map plus
-    the project's i18n labels. Injected as extra context so the term list is complete."""
+    UI terms harvested from locale files AND source code (label/title/const strings) —
+    so repos without i18n files still get a rich term list."""
     parts = []
     titles = [p.get("title", "") for p in (structure.get("pages") or []) if p.get("title")]
     if titles:
         parts.append("Documented modules / pages (each is a domain area — extract its key terms):\n"
                      + "\n".join(f"- {t}" for t in titles[:200]))
     labels = _collect_i18n_labels(clone_dir, file_tree, max_labels)
+    seen = set(labels)
+    for s in _collect_code_labels(clone_dir, max_labels):
+        if s not in seen:
+            seen.add(s)
+            labels.append(s)
+            if len(labels) >= max_labels:
+                break
     if labels:
-        parts.append("UI / i18n labels (authoritative business terms — cover these):\n"
-                     + "\n".join(f"- {s}" for s in labels))
+        parts.append(f"{_GLOSSARY_LABELS_HEADER}\n" + "\n".join(f"- {s}" for s in labels)
+                     + "\n（可将同义/序号变体合并为一条，如“备注一/备注二”合并为“备注”；但每个实质术语都必须出现在某个分组表格中）")
     return "\n\n".join(parts)
+
+
+def _labels_from_extra_context(extra_context: str) -> list:
+    """Recover the term list from the glossary extra-context (lines under the fixed
+    header) — used by the coverage repair pass."""
+    if _GLOSSARY_LABELS_HEADER not in (extra_context or ""):
+        return []
+    block = extra_context.split(_GLOSSARY_LABELS_HEADER, 1)[1]
+    out = []
+    for ln in block.splitlines():
+        ln = ln.strip()
+        if ln.startswith("- "):
+            out.append(ln[2:].strip())
+        elif out and ln and not ln.startswith("-"):
+            break  # past the list
+    return out
+
+
+def rebuild_page_extra_context(repo_url: str, repo_type: str, page_id: str, page_type: str,
+                               structure: dict) -> str:
+    """Reconstruct the extra grounding for a scaffold page OUTSIDE the runner (the
+    per-page regenerate endpoint) — the structure page needs the file tree, the
+    glossary page needs the term context. Returns '' for ordinary pages."""
+    needs_tree = page_id == SCAFFOLD_STRUCTURE_ID
+    needs_glossary = page_id == SCAFFOLD_GLOSSARY_ID or normalize_page_type(page_type) == "glossary"
+    if not (needs_tree or needs_glossary):
+        return ""
+    # Locate the existing clone (same layout index_repo/refresh_index use).
+    if repo_url and not repo_url.startswith(("http://", "https://")):
+        clone_dir = repo_url  # local repo: the path itself
+    else:
+        try:
+            from adalflow.utils import get_adalflow_default_root_path
+            from api.data_pipeline import DatabaseManager
+            repo_name = DatabaseManager()._extract_repo_name_from_url(repo_url, repo_type)
+            clone_dir = os.path.join(get_adalflow_default_root_path(), "repos", repo_name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("rebuild_page_extra_context: cannot locate clone: %s", e)
+            return ""
+    if not os.path.isdir(clone_dir):
+        return ""
+    file_tree, _ = derive_tree_from_clone(clone_dir)
+    if needs_tree:
+        return ("Project file tree (authoritative for directory structure and paths):\n"
+                f"<file_tree>\n{_trim_tree(file_tree)}\n</file_tree>")
+    return build_glossary_context(clone_dir, file_tree, structure)
 
 
 # --- the runner --------------------------------------------------------------

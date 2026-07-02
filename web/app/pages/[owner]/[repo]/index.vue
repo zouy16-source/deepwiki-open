@@ -266,7 +266,7 @@ onMounted(loadData)
               <div class="flex items-center gap-2 mt-2">
                 <UButton color="primary" size="xs" icon="i-lucide-sparkles" label="开始重新生成" :loading="busy" @click="doRegen" />
                 <UButton color="neutral" variant="ghost" size="xs" label="取消" :disabled="busy" @click="closeRegen" />
-                <span v-if="busy" class="text-xs text-muted">生成中，约 15-40 秒…</span>
+                <span v-if="busy" class="text-xs text-muted">生成中：普通页约 1 分钟，术语表等大页约 3-6 分钟，请勿重复点击…</span>
               </div>
             </div>
 

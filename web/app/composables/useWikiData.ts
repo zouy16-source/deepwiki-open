@@ -511,15 +511,31 @@ export function useWikiData(opts: WikiDataOptions) {
     }
   }
 
+  async function fetchPage(pageId: string): Promise<WikiPage | null> {
+    const b = baseBody()
+    const params = new URLSearchParams({
+      owner: b.owner, repo: b.repo, repo_type: b.repo_type, language: b.language, page_id: pageId,
+    })
+    try {
+      const res = await $fetch<{ page: WikiPage }>(`/api/wiki/page?${params.toString()}`)
+      return res.page
+    } catch {
+      return null
+    }
+  }
+
   async function regeneratePage(pageId: string, instruction = '') {
     pageBusy.value = pageId
     pageActionError.value = null
+    const prevUpdatedAt = generatedPages.value[pageId]?.updated_at || 0
     try {
       const r = effectiveRepoInfo.value
       const res = await $fetch<{ page: WikiPage }>('/api/wiki/page/regenerate', {
         method: 'POST',
-        // regeneration is one LLM call but can take ~30s+; give it room.
-        timeout: 180_000,
+        // Big pages (glossary + coverage repair) take ~5 min — longer than both this
+        // timeout and the dev-proxy's ~300s limit. The backend keeps running after the
+        // HTTP request dies, so on timeout we fall through to polling below.
+        timeout: 270_000,
         body: {
           ...baseBody(),
           page_id: pageId,
@@ -533,7 +549,23 @@ export function useWikiData(opts: WikiDataOptions) {
       applyPageUpdate(res.page)
       return true
     } catch (err) {
-      pageActionError.value = err instanceof Error ? err.message : '重新生成失败'
+      const msg = err instanceof Error ? err.message : String(err)
+      const status = (err as { statusCode?: number })?.statusCode
+      const maybeStillRunning = /timeout|abort/i.test(msg) || status === 502 || status === 504
+      if (!maybeStillRunning) {
+        pageActionError.value = msg || '重新生成失败'
+        return false
+      }
+      // Poll for the finished result (updated_at changes when the backend saves).
+      for (let i = 0; i < 60; i++) { // up to ~10 min
+        await new Promise((resolve) => setTimeout(resolve, 10_000))
+        const p = await fetchPage(pageId)
+        if (p && (p.updated_at || 0) > prevUpdatedAt) {
+          applyPageUpdate(p)
+          return true
+        }
+      }
+      pageActionError.value = '生成时间过长：任务可能仍在后台运行，请稍后刷新页面查看'
       return false
     } finally {
       pageBusy.value = null

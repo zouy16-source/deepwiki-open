@@ -789,10 +789,18 @@ async def regenerate_wiki_page(req: PageRegenerateRequest):
     )
     default_branch = cached.default_branch or "main"
 
+    # Scaffold pages (glossary / project-structure) need their extra grounding rebuilt
+    # (term list / file tree) — without it a per-page regenerate would come back THINNER
+    # than the original full-pipeline generation.
+    extra_context = await asyncio.to_thread(
+        rebuild_page_extra_context, gen_req.repo_url, req.repo_type,
+        page.id, page.type or "feature", cached.wiki_structure.model_dump(),
+    )
+
     async with httpx.AsyncClient() as client:
         content, ok = await _gen_page(
             client, SELF_BASE_URL, gen_req, page_dict, default_branch, 1,
-            extra_context="", instruction=req.instruction,
+            extra_context=extra_context, instruction=req.instruction,
         )
     if not ok:
         raise HTTPException(status_code=502, detail=f"Regeneration failed: {content}")
@@ -811,6 +819,26 @@ async def regenerate_wiki_page(req: PageRegenerateRequest):
     return {"message": "Page regenerated", "content": content, "page": page}
 
 
+@app.get("/api/wiki/page")
+async def get_wiki_page(
+    owner: str = Query(...),
+    repo: str = Query(...),
+    repo_type: str = Query(...),
+    language: str = Query(...),
+    page_id: str = Query(...),
+):
+    """Fetch ONE page from the cache. Lightweight poll target: long regenerations
+    (glossary ~5 min) outlive HTTP/proxy timeouts, so the client polls this for the
+    page's updated_at to change instead of holding the request open."""
+    cached = await read_wiki_cache(owner, repo, repo_type, language)
+    if not cached:
+        raise HTTPException(status_code=404, detail="Wiki cache not found")
+    page = cached.generated_pages.get(page_id)
+    if page is None:
+        raise HTTPException(status_code=404, detail=f"Page '{page_id}' not found")
+    return {"page": page}
+
+
 @app.get("/api/wiki/page/history")
 async def get_wiki_page_history(
     owner: str = Query(...),
@@ -827,7 +855,7 @@ async def get_wiki_page_history(
 
 # --- Wiki Generation Job System --- (background tasks; see docs/wiki-jobs-api.md)
 from api.wiki_jobs import JobManager, GenerateRequest, make_fake_runner, JobKey
-from api.wiki_generator import make_real_runner, _gen_page, SELF_BASE_URL
+from api.wiki_generator import make_real_runner, _gen_page, rebuild_page_extra_context, SELF_BASE_URL
 
 
 def _wiki_cache_exists(key: JobKey) -> bool:
