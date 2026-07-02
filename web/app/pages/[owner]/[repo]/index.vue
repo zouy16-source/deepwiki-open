@@ -51,7 +51,9 @@ const {
   isLoading, loadingMessage, error, embeddingError,
   wikiStructure, currentPageId, generatedPages, pagesInProgress,
   effectiveRepoInfo, isExporting, exportError, provider: curProvider, model: curModel,
+  pageBusy, pageActionError,
   generateFileUrl, loadData, exportWiki, selectPage,
+  savePageEdit, regeneratePage, revertPage, fetchPageHistory,
 } = useWikiData({
   owner, repo, repoInfo, language, isComprehensive, token, provider, model,
   isCustomModel, customModel, excludedDirs, excludedFiles, includedDirs, includedFiles,
@@ -60,6 +62,46 @@ const {
 const currentPage = computed(() =>
   currentPageId.value ? generatedPages.value[currentPageId.value] : undefined,
 )
+
+// --- per-page edit / regenerate / revert ---
+const editing = ref(false)
+const editMode = ref<'rich' | 'source'>('rich')
+const editContent = ref('')
+const regenOpen = ref(false)
+const instruction = ref('')
+const historyOpen = ref(false)
+const busy = computed(() => !!currentPage.value && pageBusy.value === currentPage.value.id)
+
+function fmtTime(ms?: number) {
+  if (!ms) return ''
+  try { return new Date(ms).toLocaleString() } catch { return '' }
+}
+function startEdit() {
+  if (!currentPage.value) return
+  editContent.value = currentPage.value.content
+  regenOpen.value = false
+  editMode.value = 'rich'
+  editing.value = true
+}
+function setEditMode(m: 'rich' | 'source') { editMode.value = m }
+async function saveEdit() {
+  if (!currentPage.value) return
+  if (await savePageEdit(currentPage.value.id, editContent.value)) editing.value = false
+}
+async function doRegen() {
+  if (!currentPage.value) return
+  if (await regeneratePage(currentPage.value.id, instruction.value.trim())) {
+    regenOpen.value = false
+    instruction.value = ''
+  }
+}
+function doRevert() {
+  if (currentPage.value) void revertPage(currentPage.value.id)
+}
+function toggleRegen() { regenOpen.value = !regenOpen.value }
+function closeRegen() { regenOpen.value = false }
+function cancelEdit() { editing.value = false }
+function openHistory() { historyOpen.value = true }
 const progressPct = computed(() => {
   const s = wikiStructure.value
   if (!s || !s.pages.length) return 0
@@ -91,7 +133,12 @@ const breadcrumbItems = computed(() => [
 ])
 
 const contentEl = ref<HTMLElement | null>(null)
-watch(currentPageId, () => contentEl.value?.scrollTo({ top: 0, behavior: 'smooth' }))
+watch(currentPageId, () => {
+  editing.value = false
+  regenOpen.value = false
+  instruction.value = ''
+  contentEl.value?.scrollTo({ top: 0, behavior: 'smooth' })
+})
 
 // The `home` layout/dashboard owns full-height/no-scroll now, so no html overflow hack.
 onMounted(loadData)
@@ -195,22 +242,79 @@ onMounted(loadData)
         <!-- Content -->
         <div id="wiki-content" ref="contentEl" class="w-full flex-grow p-6 lg:p-8 overflow-y-auto [scrollbar-gutter:stable]">
           <div v-if="currentPage" class="max-w-full mx-auto pb-28">
-            <h3 class="text-xl font-bold text-default mb-4 break-words">{{ currentPage.title }}</h3>
-            <Suspense :key="currentPageId">
-              <Markdown :content="currentPage.content" :resolve-file-href="generateFileUrl" />
-              <template #fallback>
-                <div class="p-8 text-center text-muted text-sm">{{ t('common.loading') }}</div>
-              </template>
-            </Suspense>
-
-            <div v-if="currentPage.relatedPages.length" class="mt-8 pt-4 border-t border-default">
-              <h4 class="text-sm font-semibold text-muted mb-3">{{ t('repoPage.relatedPages') }}</h4>
-              <div class="flex flex-wrap gap-2">
-                <template v-for="rid in currentPage.relatedPages" :key="rid">
-                  <UButton v-if="relatedTitle(rid)" color="primary" variant="soft" size="xs" :label="relatedTitle(rid)" @click="selectPage(rid)" />
-                </template>
+            <!-- Title + per-page actions -->
+            <div class="flex items-start justify-between gap-3 mb-4 flex-wrap">
+              <div class="min-w-0">
+                <h3 class="text-xl font-bold text-default break-words">{{ currentPage.title }}</h3>
+                <div class="flex items-center gap-2 mt-1 text-xs text-muted">
+                  <UBadge v-if="currentPage.edited" color="warning" variant="soft" size="xs" label="已手动编辑" />
+                  <span v-if="currentPage.updated_at">更新于 {{ fmtTime(currentPage.updated_at) }}</span>
+                </div>
+              </div>
+              <div v-if="!editing" class="flex items-center gap-1.5 shrink-0">
+                <UButton color="neutral" variant="outline" size="xs" icon="i-lucide-pencil" label="编辑" :disabled="busy" @click="startEdit" />
+                <UButton color="primary" variant="outline" size="xs" icon="i-lucide-rotate-cw" label="重新生成" :disabled="busy" @click="toggleRegen" />
+                <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-history" label="历史" :disabled="busy" @click="openHistory" />
+                <UButton v-if="currentPage.prev_content" color="neutral" variant="ghost" size="xs" icon="i-lucide-undo-2" label="回滚" :loading="busy" :disabled="busy" @click="doRevert" />
               </div>
             </div>
+
+            <!-- Regenerate panel (optional instruction) -->
+            <div v-if="regenOpen && !editing" class="mb-5 border border-default rounded-lg p-3 bg-muted/30">
+              <p class="text-xs text-muted mb-2">可选：告诉 AI 哪里要改（留空则按当前模板整页重生）</p>
+              <UTextarea v-model="instruction" :rows="2" class="w-full" placeholder="例如：业务流程图画反了，应为 登录→鉴权→回调；补充异常用例" />
+              <div class="flex items-center gap-2 mt-2">
+                <UButton color="primary" size="xs" icon="i-lucide-sparkles" label="开始重新生成" :loading="busy" @click="doRegen" />
+                <UButton color="neutral" variant="ghost" size="xs" label="取消" :disabled="busy" @click="closeRegen" />
+                <span v-if="busy" class="text-xs text-muted">生成中，约 15-40 秒…</span>
+              </div>
+            </div>
+
+            <p v-if="pageActionError" class="mb-3 text-xs text-error">{{ pageActionError }}</p>
+
+            <!-- Edit mode: editor (rich / source) + live preview -->
+            <div v-if="editing">
+              <div class="flex items-center gap-2 mb-2 flex-wrap">
+                <div class="flex items-center rounded-md border border-default overflow-hidden">
+                  <UButton :color="editMode === 'rich' ? 'primary' : 'neutral'" :variant="editMode === 'rich' ? 'soft' : 'ghost'" size="xs" icon="i-lucide-type" label="富文本" @click="setEditMode('rich')" />
+                  <UButton :color="editMode === 'source' ? 'primary' : 'neutral'" :variant="editMode === 'source' ? 'soft' : 'ghost'" size="xs" icon="i-lucide-code" label="源码" @click="setEditMode('source')" />
+                </div>
+                <UButton color="primary" size="xs" icon="i-lucide-save" label="保存" :loading="busy" @click="saveEdit" />
+                <UButton color="neutral" variant="ghost" size="xs" label="取消" :disabled="busy" @click="cancelEdit" />
+                <span class="text-xs text-muted">含 &lt;details&gt;/引用/mermaid 的页面，建议用「源码」精修</span>
+              </div>
+              <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div class="flex flex-col min-w-0 h-[70vh]">
+                  <WikiMarkdownEditor v-if="editMode === 'rich'" v-model="editContent" class="h-full" />
+                  <UTextarea v-else v-model="editContent" :rows="26" class="w-full h-full" :ui="{ base: 'font-mono text-sm h-full' }" />
+                </div>
+                <div class="min-w-0">
+                  <label class="text-xs text-muted mb-1 block">预览（与实际页面一致）</label>
+                  <div class="border border-default rounded-lg p-4 overflow-auto h-[70vh]">
+                    <Markdown :content="editContent" :resolve-file-href="generateFileUrl" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- View mode -->
+            <template v-else>
+              <Suspense :key="currentPageId">
+                <Markdown :content="currentPage.content" :resolve-file-href="generateFileUrl" />
+                <template #fallback>
+                  <div class="p-8 text-center text-muted text-sm">{{ t('common.loading') }}</div>
+                </template>
+              </Suspense>
+
+              <div v-if="currentPage.relatedPages.length" class="mt-8 pt-4 border-t border-default">
+                <h4 class="text-sm font-semibold text-muted mb-3">{{ t('repoPage.relatedPages') }}</h4>
+                <div class="flex flex-wrap gap-2">
+                  <template v-for="rid in currentPage.relatedPages" :key="rid">
+                    <UButton v-if="relatedTitle(rid)" color="primary" variant="soft" size="xs" :label="relatedTitle(rid)" @click="selectPage(rid)" />
+                  </template>
+                </div>
+              </div>
+            </template>
           </div>
           <div v-else class="flex flex-col items-center justify-center p-8 text-muted h-full">
             <UIcon name="i-fa6-solid-book-open" class="text-4xl mb-4" />
@@ -220,6 +324,16 @@ onMounted(loadData)
         </div>
       </div>
     </main>
+
+    <!-- Per-page change timeline (history + diff + revert) -->
+    <WikiHistoryTimeline
+      v-if="currentPage"
+      v-model="historyOpen"
+      :page-id="currentPage.id"
+      :page-title="currentPage.title"
+      :fetch-history="fetchPageHistory"
+      :revert="revertPage"
+    />
 
     <!-- Docked Ask panel (anchored to this panel, not the viewport) -->
     <div v-if="!isLoading && wikiStructure" class="absolute bottom-0 left-0 right-0 lg:right-[24%] z-40 px-3 pb-3 pointer-events-none">

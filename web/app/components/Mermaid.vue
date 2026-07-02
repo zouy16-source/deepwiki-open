@@ -90,6 +90,15 @@ function ensureMermaid(): Promise<typeof mermaidType> {
   return mermaidReady
 }
 
+// LLMs markdown-escape punctuation inside diagram text (e.g. "goAuthLogin\(\)", "\_",
+// "\."). Mermaid has no backslash escaping, so these render as stray backslashes or —
+// once a label is quoted below — inject characters that break the parse. Drop the
+// backslash before punctuation that is safe to bare; deliberately NOT [ ] | " ` since
+// those would collide with the label/quote structure quoteSpecialLabels relies on.
+function unescapeMarkdownPunct(src: string): string {
+  return src.replace(/\\([!#$%&'()*+,\-.\/:;<=>?@\\^_{}~])/g, '$1')
+}
+
 // Quote node/edge labels that contain '@' (e.g. "@nuxtjs/axios", decorators).
 // LLM-generated diagrams routinely put characters Mermaid v11 rejects in unquoted
 // labels — '@' (node-metadata syntax), and in edge/node labels things like
@@ -97,29 +106,34 @@ function ensureMermaid(): Promise<typeof mermaidType> {
 // holds a char beyond word/space and a few tolerated marks (. , -). Already-quoted
 // labels are left untouched.
 function quoteSpecialLabels(src: string): string {
-  // \x00 (mask byte, below) counts as safe so masked already-quoted labels aren't re-quoted.
+  // \x00 (mask byte, below) counts as safe so masked labels aren't re-quoted.
   const UNSAFE = /[^\w\s.,\-\x00]/
-  // 1) Edge (pipe) labels first: quote the whole |...| label when unsafe.
-  let s = src.replace(/(\|)([^"\n|]+?)(\|)/g, (m, o, l, c) =>
-    UNSAFE.test(l) ? `${o}"${l}"${c}` : m)
-  // 2) Mask quoted strings so the node-shape passes below never reach inside them
-  //    (e.g. the parens within an edge label just quoted above).
   const masks: string[] = []
-  s = s.replace(/"[^"\n]*"/g, (m) => `\x00${masks.push(m) - 1}\x00`)
-  // 3) Node labels: [rect], (round), {diamond}. Masked (already-quoted) labels read
-  //    as safe, so they are left alone.
-  const q = (o: string, l: string, c: string) => (UNSAFE.test(l) ? `${o}"${l}"${c}` : `${o}${l}${c}`)
-  s = s
-    .replace(/(\[)([^[\]"\n|]+?)(\])/g, (_m, o, l, c) => q(o, l, c)) // [label]
-    .replace(/(\()([^()"\n|]+?)(\))/g, (_m, o, l, c) => q(o, l, c)) // (label)
-    .replace(/(\{)([^{}"\n|]+?)(\})/g, (_m, o, l, c) => q(o, l, c)) // {label}
-  // 4) Restore masked strings.
+  const mask = (s: string) => `\x00${masks.push(s) - 1}\x00`
+  // 0) Mask pre-existing quoted strings so the passes below never reach inside them.
+  let s = src.replace(/"[^"\n]*"/g, mask)
+  // 1) Edge (pipe) labels: quote the whole |...| label when unsafe, then mask the
+  //    quoted text so its punctuation can't be re-matched by a node-shape pass below.
+  s = s.replace(/(\|)([^"\n|]+?)(\|)/g, (m, o, l, c) =>
+    UNSAFE.test(l) ? `${o}${mask(`"${l}"`)}${c}` : m)
+  // 2) Node labels: [rect], (round), {diamond}. Quote when unsafe and mask each result
+  //    BEFORE the next pass runs — otherwise nested punctuation in a just-quoted label
+  //    (e.g. the parens inside [ ... goAuthLogin() ... ]) gets matched again by a later
+  //    pass and corrupted with injected quotes.
+  const shape = (re: RegExp) => {
+    s = s.replace(re, (_m: string, o: string, l: string, c: string) =>
+      UNSAFE.test(l) ? `${o}${mask(`"${l}"`)}${c}` : `${o}${l}${c}`)
+  }
+  shape(/(\[)([^[\]"\n|]+?)(\])/g) // [label]
+  shape(/(\()([^()"\n|]+?)(\))/g) // (label)
+  shape(/(\{)([^{}"\n|]+?)(\})/g) // {label}
+  // 3) Restore masked strings.
   return s.replace(/\x00(\d+)\x00/g, (_m, i) => masks[Number(i)] ?? _m)
 }
 
 // Strip artifacts the LLM sometimes appends inside a ```mermaid block (e.g. a
-// trailing "Sources: [file](...)" citation line), then quote labels with special
-// characters — both break Mermaid parsing.
+// trailing "Sources: [file](...)" citation line), unescape markdown punctuation, then
+// quote labels with special characters — all break or dirty Mermaid parsing.
 function cleanMermaidChart(raw: string): string {
   const lines = (raw || '').split('\n')
   const out: string[] = []
@@ -127,7 +141,7 @@ function cleanMermaidChart(raw: string): string {
     if (/^\s*sources?\s*[:：]/i.test(line)) break
     out.push(line)
   }
-  return quoteSpecialLabels(out.join('\n').trim())
+  return quoteSpecialLabels(unescapeMarkdownPunct(out.join('\n').trim()))
 }
 
 const colorMode = useColorMode()

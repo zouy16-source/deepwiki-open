@@ -166,7 +166,17 @@ def download_repo(repo_url: str, local_path: str, repo_type: str = None, access_
 # Alias for backward compatibility
 download_github_repo = download_repo
 
-def read_all_documents(path: str, embedder_type: str = None, is_ollama_embedder: bool = None, 
+
+def add_line_numbers(text: str) -> str:
+    """Prefix each line with its 1-based number (cat -n style). Code is indexed
+    line-numbered so retrieved chunks carry line info — the LLM then cites accurate
+    `[file:start-end]` ranges instead of fabricating them."""
+    lines = text.split("\n")
+    width = len(str(len(lines)))
+    return "\n".join(f"{str(i + 1).rjust(width)}: {ln}" for i, ln in enumerate(lines))
+
+
+def read_all_documents(path: str, embedder_type: str = None, is_ollama_embedder: bool = None,
                       excluded_dirs: List[str] = None, excluded_files: List[str] = None,
                       included_dirs: List[str] = None, included_files: List[str] = None):
     """
@@ -336,6 +346,9 @@ def read_all_documents(path: str, embedder_type: str = None, is_ollama_embedder:
                         and not relative_path.startswith("app_")
                         and "test" not in relative_path.lower()
                     )
+
+                    # Index code with line numbers so citations point to real lines.
+                    content = add_line_numbers(content)
 
                     # Check token count
                     token_count = count_tokens(content, embedder_type)

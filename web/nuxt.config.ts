@@ -107,5 +107,8 @@ export default defineNuxtConfig({
     '/api/wiki/jobs': { proxy: `${SERVER_BASE_URL}/api/wiki/jobs` },
     '/api/wiki/jobs/**': { proxy: `${SERVER_BASE_URL}/api/wiki/jobs/**` },
     '/api/wiki/update_status': { proxy: `${SERVER_BASE_URL}/api/wiki/update_status` },
+    // Per-page edit / regenerate / revert (Wikipedia-style page refinement).
+    '/api/wiki/page': { proxy: `${SERVER_BASE_URL}/api/wiki/page` },
+    '/api/wiki/page/**': { proxy: `${SERVER_BASE_URL}/api/wiki/page/**` },
   },
 })

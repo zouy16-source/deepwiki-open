@@ -144,14 +144,101 @@ The root element MUST be <div class="slide"> with width:100%/height:100% and a d
 Please return ONLY the HTML with no markdown formatting or code blocks. Just the raw HTML for the slide.`
 }
 
+// Page archetypes — a single rigid template on every page is what made wikis read
+// the same ("功能架构 / 核心API / 数据模型 / 总结" everywhere). Each page carries a TYPE
+// (assigned during planning) that picks a DIFFERENT body. Keep in sync with
+// api/wiki_generator.py (_PAGE_BODY / PAGE_TYPES).
+export type PagePromptType = 'overview' | 'architecture' | 'feature' | 'reference' | 'cross-cutting' | 'guide' | 'glossary'
+
+const PAGE_TYPES: PagePromptType[] = ['overview', 'architecture', 'feature', 'reference', 'cross-cutting', 'guide', 'glossary']
+
+export function normalizePageType(value?: string): PagePromptType {
+  const t = (value || '').trim().toLowerCase().replace(/[_\s]/g, '-')
+  if (['crosscutting', 'cross', 'shared', 'cross-cutting-concern'].includes(t)) return 'cross-cutting'
+  if (['terms', 'term', 'terminology', 'glossaries', '术语', '术语表'].includes(t)) return 'glossary'
+  return (PAGE_TYPES as string[]).includes(t) ? (t as PagePromptType) : 'feature'
+}
+
+// "{lang}" is substituted; the section HEADINGS themselves must be written in {lang}.
+const PAGE_BODY: Record<PagePromptType, string> = {
+  feature: `This is a FEATURE / SCREEN / business-module page. Structure the WHOLE page as a traceable chain and use THESE THREE H2 sections in EXACTLY this order (write each heading in {lang}; canonical names: Business Flow / Code Responsibilities / Test Flow). Do NOT merge, reorder, or replace them with a generic outline:
+
+## Business Flow
+- Describe what the feature does as a NUMBERED business/user flow — Step 1, Step 2, … — including decision branches, the roles/actors involved, preconditions, and key business rules.
+- MANDATORY: include at least one Mermaid flowchart (\`graph TD\`) that visualizes this flow with its steps and branches. If the flow crosses front-end / back-end / third-party systems, ALSO add a \`sequenceDiagram\`. A Business Flow section with NO diagram is unacceptable.
+
+## Code Responsibilities
+- Map EACH numbered business step above to the code that implements it, as a Markdown table with columns: business step | file / component / function | responsibility & key logic | Sources.
+- Show how the parts collaborate (e.g. page/component → API wrapper → backend endpoint); add a Mermaid \`sequenceDiagram\` or a call-chain \`graph TD\` when it clarifies the call path.
+- Call out WHERE to change / extend behaviour (the key extension points).
+
+## Test Flow
+- Describe how to verify the feature as test scenarios that trace back to the business steps/rules above, as a Markdown table with columns: scenario | preconditions | steps | expected result.
+- Cover the happy path AND edge / exception cases (empty data, no permission, role differences, concurrency, failure handling).
+- Add a test flowchart (\`graph TD\`) when the flow has non-trivial conditional branches.
+
+Keep the three sections traceable: the SAME numbered steps should be referenceable across Business Flow → Code Responsibilities → Test Flow, so a reader can follow one step end to end.`,
+
+  reference: `This is a REFERENCE page (API / data model / configuration). Prefer STRUCTURED TABLES over prose — keep narrative to a minimum:
+- API: one row per endpoint/method with request params, response fields, and error codes.
+- Data model: entities, fields, types, constraints and relationships (add an \`erDiagram\` when it clarifies relationships).
+- Configuration: one row per option with its default, effect and scope.
+Document only what is specific here; do NOT re-explain cross-cutting mechanisms.`,
+
+  overview: `This is an OVERVIEW / entry page for ALL audiences (product, engineering, QA):
+- What the project/module does, its core value, and who its users are (2-3 short paragraphs).
+- A feature map: use a Mermaid \`graph TD\` to show the main modules and how they relate.
+- "Where to go next": link to the detailed module/reference pages with \`[Link Text](#page-anchor-or-id)\`.
+Keep it high-level and leave the details to the linked pages.`,
+
+  architecture: `This is an ARCHITECTURE page:
+- The layers and main components, shown with a Mermaid architecture diagram (\`graph TD\`).
+- Key data flows / call chains, shown with a Mermaid \`sequenceDiagram\` or flowchart.
+- Technology choices and notable design decisions, each grounded in the source files.`,
+
+  'cross-cutting': `This is the SINGLE AUTHORITATIVE page for a cross-cutting concern (e.g. authentication & permissions, front-end/back-end communication, environment/configuration). Every other page LINKS here instead of repeating it, so be COMPLETE:
+- Explain the whole mechanism in one place, end to end.
+- Show the overall flow with a Mermaid diagram.
+- Explain how other modules integrate with / reuse it (what a feature page should link to rather than restate).`,
+
+  guide: `This is a HOW-TO / guide page (setup, deployment, common operational tasks). Make it ACTIONABLE:
+- Prerequisites.
+- Numbered, step-by-step instructions with concrete commands / config examples.
+- Common problems and troubleshooting.`,
+
+  glossary: `This is the project GLOSSARY / business-terminology page. Be COMPREHENSIVE — readers expect FULL coverage, not a handful of terms; do NOT summarize or stop early.
+- Enumerate EVERY distinct domain / business term, entity, status, role and acronym used across the project. Draw them from the module list and the UI / i18n labels in the ADDITIONAL CONTEXT below, plus entities, fields, enums and statuses in the source files.
+- GROUP terms by domain (e.g. accounts, waybills, numbering & recycling, sales, system / permissions, …) with an H2 or H3 per group; within each group use a Markdown table with columns: term | EN / abbreviation | definition | where it is used.
+- Link the "where it is used" cell to the relevant wiki page with \`[Link Text](#page-anchor-or-id)\` when possible.
+- Include acronyms and bilingual mappings (e.g. SSO, VIP, GIS; 面单 / waybill). Aim for breadth — a real business system has dozens of terms; cover the labels listed in the context.`,
+}
+
+const DEDUP_RULE = `
+AVOID DUPLICATION: shared mechanisms — authentication & permissions, front-end/back-end communication, environment/configuration, shared API conventions — are documented ONCE on their own dedicated cross-cutting pages. If this page touches any of them, LINK to that page with \`[Link Text](#page-anchor-or-id)\` instead of re-explaining it; describe only what is SPECIFIC to this page.
+`
+
+// Shared page-type vocabulary injected into the structure prompt so each page gets an
+// archetype; buildPagePrompt then picks a distinct structure per type.
+const TYPE_VOCAB = `Classify EACH page with a <type> from: overview | architecture | feature | reference | cross-cutting | guide.
+- feature: a screen / business feature (MOST module pages) — written as Business Flow → Code Responsibilities → Test Flow, with a mandatory flowchart.
+- reference: an API, data-model, or configuration reference (mostly tables).
+- cross-cutting: a shared mechanism documented ONCE and linked from elsewhere (authentication & permissions, front-end/back-end communication, environment/config).
+- overview / architecture / guide: foundational topics (project overview, system architecture, setup/deployment).
+Create AT MOST ONE cross-cutting page per shared mechanism — do NOT repeat auth/communication/config on every module page.`
+
 // Page-content prompt. `filePathsList` is the pre-built markdown list of source
-// files (e.g. "- [path](url)\n- ...").
+// files (e.g. "- [path](url)\n- ..."). `pageType` selects the body structure.
 export function buildPagePrompt(opts: {
   pageTitle: string
   filePathsList: string
   language: string
+  pageType?: string
 }): string {
   const { pageTitle, filePathsList, language } = opts
+  const ptype = normalizePageType(opts.pageType)
+  const lang = languageLabel(language)
+  const body = PAGE_BODY[ptype].replace(/\{lang\}/g, lang)
+  const dedup = ptype === 'cross-cutting' ? '' : DEDUP_RULE
   return `You are an expert technical writer and software architect.
 Your task is to generate a comprehensive and accurate technical wiki page in Markdown format about a specific feature, system, or module within a given software project.
 
@@ -174,52 +261,35 @@ ${filePathsList}
 
 Immediately after the \`<details>\` block, the main title of the page should be a H1 Markdown heading: \`# ${pageTitle}\`.
 
-Based ONLY on the content of the \`[RELEVANT_SOURCE_FILES]\`:
+Then a concise 1-2 sentence introduction of "${pageTitle}" (its purpose and scope within the project), and after it the body below.
 
-1.  **Introduction:** Start with a concise introduction (1-2 paragraphs) explaining the purpose, scope, and high-level overview of "${pageTitle}" within the context of the overall project. If relevant, and if information is available in the provided files, link to other potential wiki pages using the format \`[Link Text](#page-anchor-or-id)\`.
+PAGE BODY — this page's type is "${ptype}". Follow the structure for THIS type. Do NOT fall back to a generic "architecture / core API / data model / summary" outline; use only the sections called for here, and ground every section ONLY in the \`[RELEVANT_SOURCE_FILES]\`:
 
-2.  **Detailed Sections:** Break down "${pageTitle}" into logical sections using H2 (\`##\`) and H3 (\`###\`) Markdown headings. For each section:
-    *   Explain the architecture, components, data flow, or logic relevant to the section's focus, as evidenced in the source files.
-    *   Identify key functions, classes, data structures, API endpoints, or configuration elements pertinent to that section.
+${body}
+${dedup}
+FORMATTING RULES (apply to all of the above):
 
-3.  **Mermaid Diagrams:**
-    *   EXTENSIVELY use Mermaid diagrams (e.g., \`flowchart TD\`, \`sequenceDiagram\`, \`classDiagram\`, \`erDiagram\`, \`graph TD\`) to visually represent architectures, flows, relationships, and schemas found in the source files.
-    *   Ensure diagrams are accurate and directly derived from information in the \`[RELEVANT_SOURCE_FILES]\`.
-    *   Provide a brief explanation before or after each diagram to give context.
-    *   CRITICAL: All diagrams MUST follow strict vertical orientation:
-       - Use "graph TD" (top-down) directive for flow diagrams
-       - NEVER use "graph LR" (left-right)
-       - Maximum node width should be 3-4 words
-       - ALWAYS wrap node/edge labels in double quotes when they contain special characters such as @, /, (), :, or punctuation, e.g. E["@nuxtjs/axios"], N["serial/account"] — unquoted special characters break the Mermaid parser
-       - For sequence diagrams:
-         - Start with "sequenceDiagram" directive on its own line
-         - Define ALL participants at the beginning using "participant" keyword
-         - Use the correct Mermaid arrow syntax (->>, -->>, ->x, -)) with colons for labels: A->>B: My Label
-         - Use structural elements (loop/alt/opt/par) and notes where helpful
+- **Mermaid Diagrams:** Use Mermaid diagrams where they clarify a flow, relationship, or schema (\`flowchart TD\`, \`sequenceDiagram\`, \`classDiagram\`, \`erDiagram\`, \`graph TD\`), derived directly from the source files, with a one-line explanation near each. All diagrams MUST follow strict vertical orientation:
+   - Use "graph TD" (top-down) for flow diagrams; NEVER "graph LR" (left-right).
+   - Maximum node width should be 3-4 words.
+   - ALWAYS wrap node/edge labels in double quotes when they contain special characters such as @, /, (), :, or punctuation, e.g. E["@nuxtjs/axios"], N["serial/account"] — unquoted special characters break the Mermaid parser. Do NOT backslash-escape characters inside labels (write \`A["call()"]\`, never \`A[call\\(\\)]\`).
+   - For sequence diagrams: start with "sequenceDiagram" on its own line; declare ALL participants first with "participant"; use correct arrows (->>, -->>, ->x, -)) with colon labels (A->>B: My Label); use loop/alt/opt/par and notes where helpful.
+- **Tables:** Use Markdown tables to summarize APIs, parameters, configuration options, and data-model fields.
+- **Code Snippets (OPTIONAL):** Short, relevant snippets straight from the source files, with a language identifier.
+- **Source Citations (EXTREMELY IMPORTANT):**
+    *   For EVERY piece of significant information, cite the specific source file(s) and line numbers.
+    *   Use this exact format as PLAIN markdown text — range: \`Sources: [filename.ext:start_line-end_line]()\`, single line: \`Sources: [filename.ext:line_number]()\`, multiple: \`Sources: [file1.ext:1-10](), [file2.ext:5]()\`. Keep the parentheses empty.
+    *   Do NOT wrap the citation in backticks or a code span — write it as normal markdown so the links render as links.
+    *   Cite AT LEAST 5 different source files throughout the page.
+- **Technical Accuracy:** Derive everything SOLELY from the source files — do not infer or invent.
+- **Clarity:** Clear, professional, concise technical language.
 
-4.  **Tables:**
-    *   Use Markdown tables to summarize key features, API parameters, configuration options, and data model fields.
-
-5.  **Code Snippets (ENTIRELY OPTIONAL):**
-    *   Include short, relevant code snippets directly from the \`[RELEVANT_SOURCE_FILES]\` with appropriate language identifiers.
-
-6.  **Source Citations (EXTREMELY IMPORTANT):**
-    *   For EVERY piece of significant information, you MUST cite the specific source file(s) and relevant line numbers.
-    *   Use the exact format: \`Sources: [filename.ext:start_line-end_line]()\` for a range, or \`Sources: [filename.ext:line_number]()\` for a single line. Multiple files: \`Sources: [file1.ext:1-10](), [file2.ext:5]()\`.
-    *   You MUST cite AT LEAST 5 different source files throughout the wiki page.
-
-7.  **Technical Accuracy:** All information must be derived SOLELY from the \`[RELEVANT_SOURCE_FILES]\`. Do not infer or invent.
-
-8.  **Clarity and Conciseness:** Use clear, professional, and concise technical language suitable for other developers.
-
-9.  **Conclusion/Summary:** End with a brief summary paragraph if appropriate for "${pageTitle}".
-
-IMPORTANT: Generate the content in ${languageLabel(language)} language.
+IMPORTANT: Generate the content in ${lang} language (including all section headings).
 
 Remember:
 - Ground every claim in the provided source files.
 - Prioritize accuracy and direct representation of the code's functionality and structure.
-- Structure the document logically for easy understanding by other developers.
+- Use the type-specific structure above — do not homogenize every page into the same outline.
 `
 }
 
@@ -270,6 +340,7 @@ Return your analysis in the following XML format:
       <title>[Page title]</title>
       <description>[Brief description of what this page will cover]</description>
       <importance>high|medium|low</importance>
+      <type>overview|architecture|feature|reference|cross-cutting|guide</type>
       <relevant_files>
         <file_path>[Path to a relevant file]</file_path>
       </relevant_files>
@@ -292,6 +363,7 @@ Return your analysis in the following XML format:
       <title>[Page title]</title>
       <description>[Brief description of what this page will cover]</description>
       <importance>high|medium|low</importance>
+      <type>overview|architecture|feature|reference|cross-cutting|guide</type>
       <relevant_files>
         <file_path>[Path to a relevant file]</file_path>
       </relevant_files>
@@ -327,6 +399,8 @@ When designing the wiki structure, include pages that would benefit from visual 
 - State machines
 - Class hierarchies
 ${comprehensiveBlock}
+${TYPE_VOCAB}
+
 IMPORTANT FORMATTING INSTRUCTIONS:
 - Return ONLY the valid XML structure specified above
 - DO NOT wrap the XML in markdown code blocks (no \`\`\` or \`\`\`xml)

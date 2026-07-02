@@ -21,6 +21,7 @@ own HTTP endpoints (the exact pipeline the frontend used), so no refactor of the
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -105,9 +106,102 @@ _DETAILS_LABELS = {
 }
 
 
-def build_page_prompt(page_title: str, file_paths_list: str, language: str) -> str:
+# --- page archetypes -----------------------------------------------------------
+# A single rigid template applied to every page is what made wikis read the same
+# ("功能架构 / 核心API / 数据模型 / 总结" on every module). Instead each page carries
+# a TYPE (assigned during planning) that selects a DIFFERENT body structure. Shared
+# concerns (auth, communication, config) live on ONE cross-cutting page others link
+# to, rather than being re-explained on every module page.
+
+PAGE_TYPES = ("overview", "architecture", "feature", "reference", "cross-cutting", "guide", "glossary")
+
+
+def normalize_page_type(value: str) -> str:
+    t = (value or "").strip().lower().replace("_", "-").replace(" ", "-")
+    if t in ("crosscutting", "cross", "shared", "cross-cutting-concern"):
+        t = "cross-cutting"
+    if t in ("terms", "term", "terminology", "glossaries", "术语", "术语表"):
+        t = "glossary"
+    return t if t in PAGE_TYPES else "feature"
+
+
+# Per-type body instructions (the middle of the page). "{lang}" is substituted; the
+# section HEADINGS themselves must be written by the model in {lang}.
+_PAGE_BODY = {
+    "feature": """This is a FEATURE / SCREEN / business-module page. Structure the WHOLE page as a traceable chain and use THESE THREE H2 sections in EXACTLY this order (write each heading in {lang}; canonical names: Business Flow / Code Responsibilities / Test Flow). Do NOT merge, reorder, or replace them with a generic outline:
+
+## Business Flow
+- Describe what the feature does as a NUMBERED business/user flow — Step 1, Step 2, … — including decision branches, the roles/actors involved, preconditions, and key business rules.
+- MANDATORY: include at least one Mermaid flowchart (`graph TD`) that visualizes this flow with its steps and branches. If the flow crosses front-end / back-end / third-party systems, ALSO add a `sequenceDiagram`. A Business Flow section with NO diagram is unacceptable.
+
+## Code Responsibilities
+- Map EACH numbered business step above to the code that implements it, as a Markdown table with columns: business step | file / component / function | responsibility & key logic | Sources.
+- Show how the parts collaborate (e.g. page/component → API wrapper → backend endpoint); add a Mermaid `sequenceDiagram` or a call-chain `graph TD` when it clarifies the call path.
+- Call out WHERE to change / extend behaviour (the key extension points).
+
+## Test Flow
+- Describe how to verify the feature as test scenarios that trace back to the business steps/rules above, as a Markdown table with columns: scenario | preconditions | steps | expected result.
+- Cover the happy path AND edge / exception cases (empty data, no permission, role differences, concurrency, failure handling).
+- Add a test flowchart (`graph TD`) when the flow has non-trivial conditional branches.
+
+Keep the three sections traceable: the SAME numbered steps should be referenceable across Business Flow → Code Responsibilities → Test Flow, so a reader can follow one step end to end.""",
+
+    "reference": """This is a REFERENCE page (API / data model / configuration). Prefer STRUCTURED TABLES over prose — keep narrative to a minimum:
+- API: one row per endpoint/method with request params, response fields, and error codes.
+- Data model: entities, fields, types, constraints and relationships (add an `erDiagram` when it clarifies relationships).
+- Configuration: one row per option with its default, effect and scope.
+Document only what is specific here; do NOT re-explain cross-cutting mechanisms.""",
+
+    "overview": """This is an OVERVIEW / entry page for ALL audiences (product, engineering, QA):
+- What the project/module does, its core value, and who its users are (2-3 short paragraphs).
+- A feature map: use a Mermaid `graph TD` to show the main modules and how they relate.
+- "Where to go next": link to the detailed module/reference pages with `[Link Text](#page-anchor-or-id)`.
+Keep it high-level and leave the details to the linked pages.""",
+
+    "architecture": """This is an ARCHITECTURE page:
+- The layers and main components, shown with a Mermaid architecture diagram (`graph TD`).
+- Key data flows / call chains, shown with a Mermaid `sequenceDiagram` or flowchart.
+- Technology choices and notable design decisions, each grounded in the source files.""",
+
+    "cross-cutting": """This is the SINGLE AUTHORITATIVE page for a cross-cutting concern (e.g. authentication & permissions, front-end/back-end communication, environment/configuration). Every other page LINKS here instead of repeating it, so be COMPLETE:
+- Explain the whole mechanism in one place, end to end.
+- Show the overall flow with a Mermaid diagram.
+- Explain how other modules integrate with / reuse it (what a feature page should link to rather than restate).""",
+
+    "guide": """This is a HOW-TO / guide page (setup, deployment, common operational tasks). Make it ACTIONABLE:
+- Prerequisites.
+- Numbered, step-by-step instructions with concrete commands / config examples.
+- Common problems and troubleshooting.""",
+
+    "glossary": """This is the project GLOSSARY / business-terminology page. Be COMPREHENSIVE — readers expect FULL coverage, not a handful of terms; do NOT summarize or stop early.
+- Enumerate EVERY distinct domain / business term, entity, status, role and acronym used across the project. Draw them from the documented module list AND the UI / i18n labels given in the ADDITIONAL CONTEXT below, plus entities, fields, enums and statuses in the source files.
+- GROUP terms by domain (e.g. accounts, waybills, numbering & recycling, sales, system / permissions, …) with an H2 or H3 per group; within each group use a Markdown table with columns: term | EN / abbreviation | definition | where it is used.
+- Link the "where it is used" cell to the relevant wiki page with `[Link Text](#page-anchor-or-id)` when possible.
+- Include acronyms and bilingual mappings (e.g. SSO, VIP, GIS; 面单 / waybill). Aim for breadth — a real business system has dozens of terms; if the context lists many labels, cover them.""",
+}
+
+# Appended to every page EXCEPT the cross-cutting page itself, to stop each module
+# from re-describing shared mechanisms.
+_DEDUP_RULE = """
+AVOID DUPLICATION: shared mechanisms — authentication & permissions, front-end/back-end communication, environment/configuration, shared API conventions — are documented ONCE on their own dedicated cross-cutting pages. If this page touches any of them, LINK to that page with `[Link Text](#page-anchor-or-id)` instead of re-explaining it; describe only what is SPECIFIC to this page.
+"""
+
+
+def build_page_prompt(page_title: str, file_paths_list: str, language: str,
+                      page_type: str = "feature", extra_context: str = "", instruction: str = "") -> str:
     lang = language_label(language)
+    ptype = normalize_page_type(page_type)
     summary_label, intro_line = _DETAILS_LABELS.get(language, _DETAILS_LABELS["en"])
+    body = _PAGE_BODY[ptype].replace("{lang}", lang)
+    dedup = "" if ptype == "cross-cutting" else _DEDUP_RULE
+    extra = f"""
+ADDITIONAL CONTEXT (authoritative — use it to be accurate and COMPLETE; still cite concrete source files where relevant):
+{extra_context}
+""" if extra_context else ""
+    guidance = f"""
+REVISION GUIDANCE (HIGH PRIORITY) — this page is being regenerated to FIX a problem the reader reported. You MUST address this specifically; it is the whole point of this regeneration:
+{instruction}
+""" if instruction else ""
     return f"""You are an expert technical writer and software architect.
 Your task is to generate a comprehensive and accurate technical wiki page in Markdown format about a specific feature, system, or module within a given software project.
 
@@ -127,53 +221,36 @@ Do NOT write any acknowledgements, disclaimers, apologies, or any preface. The V
 
 Immediately after the `<details>` block, the main title of the page should be a H1 Markdown heading: `# {page_title}`.
 
-Based ONLY on the content of the `[RELEVANT_SOURCE_FILES]`:
+Then a concise 1-2 sentence introduction of "{page_title}" (its purpose and scope within the project), and after it the body below.
+{guidance}
+PAGE BODY — this page's type is "{ptype}". Follow the structure for THIS type. Do NOT fall back to a generic "architecture / core API / data model / summary" outline; use only the sections called for here, and ground every section ONLY in the `[RELEVANT_SOURCE_FILES]`:
 
-1.  **Introduction:** Start with a concise introduction (1-2 paragraphs) explaining the purpose, scope, and high-level overview of "{page_title}" within the context of the overall project. If relevant, and if information is available in the provided files, link to other potential wiki pages using the format `[Link Text](#page-anchor-or-id)`.
+{body}
+{dedup}{extra}
+FORMATTING RULES (apply to all of the above):
 
-2.  **Detailed Sections:** Break down "{page_title}" into logical sections using H2 (`##`) and H3 (`###`) Markdown headings. For each section:
-    *   Explain the architecture, components, data flow, or logic relevant to the section's focus, as evidenced in the source files.
-    *   Identify key functions, classes, data structures, API endpoints, or configuration elements pertinent to that section.
+- **Mermaid Diagrams:** Use Mermaid diagrams where they clarify a flow, relationship, or schema (`flowchart TD`, `sequenceDiagram`, `classDiagram`, `erDiagram`, `graph TD`), derived directly from the source files, with a one-line explanation near each. All diagrams MUST follow strict vertical orientation:
+   - Use "graph TD" (top-down) for flow diagrams; NEVER "graph LR" (left-right).
+   - Maximum node width should be 3-4 words.
+   - ALWAYS wrap node/edge labels in double quotes when they contain special characters such as @, /, (), :, or punctuation, e.g. E["@nuxtjs/axios"], N["serial/account"] — unquoted special characters break the Mermaid parser. Do NOT backslash-escape characters inside labels (write `A["call()"]`, never `A[call\\(\\)]`).
+   - For sequence diagrams: start with "sequenceDiagram" on its own line; declare ALL participants first with "participant"; use correct arrows (->>, -->>, ->x, -)) with colon labels (A->>B: My Label); use loop/alt/opt/par and notes where helpful.
+- **Tables:** Use Markdown tables to summarize APIs, parameters, configuration options, and data-model fields.
+- **Code Snippets (OPTIONAL):** Short, relevant snippets straight from the source files, with a language identifier.
+- **Source Citations (EXTREMELY IMPORTANT):**
+    *   For EVERY piece of significant information, cite the specific source file(s) and line numbers.
+    *   The source code in your context is shown with LEADING LINE NUMBERS (e.g. `  8: export const getAccountPage = ...`). You MUST use those ACTUAL line numbers in your citations — read the number at the start of the relevant lines. Do NOT guess, estimate, or invent line numbers.
+    *   Use this exact format as PLAIN markdown text — range: Sources: [filename.ext:start_line-end_line](), single line: Sources: [filename.ext:line_number](), multiple: Sources: [file1.ext:1-10](), [file2.ext:5](). Keep the parentheses empty.
+    *   Do NOT wrap the citation in backticks or a code span — write it as normal markdown so the links render as links.
+    *   Cite AT LEAST 5 different source files throughout the page.
+- **Technical Accuracy:** Derive everything SOLELY from the source files — do not infer or invent.
+- **Clarity:** Clear, professional, concise technical language.
 
-3.  **Mermaid Diagrams:**
-    *   EXTENSIVELY use Mermaid diagrams (e.g., `flowchart TD`, `sequenceDiagram`, `classDiagram`, `erDiagram`, `graph TD`) to visually represent architectures, flows, relationships, and schemas found in the source files.
-    *   Ensure diagrams are accurate and directly derived from information in the `[RELEVANT_SOURCE_FILES]`.
-    *   Provide a brief explanation before or after each diagram to give context.
-    *   CRITICAL: All diagrams MUST follow strict vertical orientation:
-       - Use "graph TD" (top-down) directive for flow diagrams
-       - NEVER use "graph LR" (left-right)
-       - Maximum node width should be 3-4 words
-       - ALWAYS wrap node/edge labels in double quotes when they contain special characters such as @, /, (), :, or punctuation, e.g. E["@nuxtjs/axios"], N["serial/account"] — unquoted special characters break the Mermaid parser
-       - For sequence diagrams:
-         - Start with "sequenceDiagram" directive on its own line
-         - Define ALL participants at the beginning using "participant" keyword
-         - Use the correct Mermaid arrow syntax (->>, -->>, ->x, -)) with colons for labels: A->>B: My Label
-         - Use structural elements (loop/alt/opt/par) and notes where helpful
-
-4.  **Tables:**
-    *   Use Markdown tables to summarize key features, API parameters, configuration options, and data model fields.
-
-5.  **Code Snippets (ENTIRELY OPTIONAL):**
-    *   Include short, relevant code snippets directly from the `[RELEVANT_SOURCE_FILES]` with appropriate language identifiers.
-
-6.  **Source Citations (EXTREMELY IMPORTANT):**
-    *   For EVERY piece of significant information, you MUST cite the specific source file(s) and relevant line numbers.
-    *   Use this exact format as PLAIN markdown text — for a range: Sources: [filename.ext:start_line-end_line](), for a single line: Sources: [filename.ext:line_number](), multiple files: Sources: [file1.ext:1-10](), [file2.ext:5](). Keep the parentheses empty.
-    *   CRITICAL: Do NOT wrap the citation in backticks (`) or a code span/code block. Write it as normal markdown on its own so the links render as links, not as literal code.
-    *   You MUST cite AT LEAST 5 different source files throughout the wiki page.
-
-7.  **Technical Accuracy:** All information must be derived SOLELY from the `[RELEVANT_SOURCE_FILES]`. Do not infer or invent.
-
-8.  **Clarity and Conciseness:** Use clear, professional, and concise technical language suitable for other developers.
-
-9.  **Conclusion/Summary:** End with a brief summary paragraph if appropriate for "{page_title}".
-
-IMPORTANT: Generate the content in {lang} language.
+IMPORTANT: Generate the content in {lang} language (including all section headings).
 
 Remember:
 - Ground every claim in the provided source files.
 - Prioritize accuracy and direct representation of the code's functionality and structure.
-- Structure the document logically for easy understanding by other developers.
+- Use the type-specific structure above — do not homogenize every page into the same outline.
 """
 
 
@@ -197,6 +274,7 @@ _XML_COMPREHENSIVE = """<wiki_structure>
       <title>[Page title]</title>
       <description>[Brief description of what this page will cover]</description>
       <importance>high|medium|low</importance>
+      <type>overview|architecture|feature|reference|cross-cutting|guide</type>
       <relevant_files>
         <file_path>[Path to a relevant file]</file_path>
       </relevant_files>
@@ -216,6 +294,7 @@ _XML_CONCISE = """<wiki_structure>
       <title>[Page title]</title>
       <description>[Brief description of what this page will cover]</description>
       <importance>high|medium|low</importance>
+      <type>overview|architecture|feature|reference|cross-cutting|guide</type>
       <relevant_files>
         <file_path>[Path to a relevant file]</file_path>
       </relevant_files>
@@ -225,6 +304,15 @@ _XML_CONCISE = """<wiki_structure>
     </page>
   </pages>
 </wiki_structure>"""
+
+# Shared page-type vocabulary injected into planning prompts so each page is tagged
+# with an archetype; build_page_prompt then picks a distinct structure per type.
+_TYPE_VOCAB = """Classify EACH page with a <type> from: overview | architecture | feature | reference | cross-cutting | guide.
+- feature: a screen / business feature (MOST module pages) — written as Business Flow → Code Responsibilities → Test Flow, with a mandatory flowchart.
+- reference: an API, data-model, or configuration reference (mostly tables).
+- cross-cutting: a shared mechanism documented ONCE and linked from elsewhere (authentication & permissions, front-end/back-end communication, environment/config).
+- overview / architecture / guide: foundational topics (project overview, system architecture, setup/deployment).
+Create AT MOST ONE cross-cutting page per shared mechanism — do NOT repeat auth/communication/config on every module page."""
 
 
 def build_structure_prompt(
@@ -274,9 +362,13 @@ Aim to cover the system FULLY. A real admin system typically needs 20-50 pages; 
 
 {coverage}
 
+{SKIP_FOUNDATIONAL_NOTE}
+
 IMPORTANT: The wiki content will be generated in {lang} language.
 
 When designing the wiki structure, include pages that would benefit from visual diagrams (architecture overviews, data flow, component relationships, process workflows, state machines, class hierarchies).
+
+{_TYPE_VOCAB}
 
 Return your analysis in the following XML format:
 
@@ -357,6 +449,7 @@ def parse_structure(response_text: str, comprehensive: bool) -> dict:
         pages.append({
             "id": pid, "title": p_title, "content": "",
             "filePaths": file_paths, "importance": importance, "relatedPages": related,
+            "type": normalize_page_type(_text(page_el.find("type"))),
         })
 
     sections = []
@@ -521,16 +614,80 @@ def _strip_md_fence(content: str) -> str:
     return content
 
 
-async def _gen_page(client, base, req, page, default_branch, retries: int) -> Tuple[str, bool]:
+# --- mandatory business-flow diagram enforcement (feature pages) --------------
+# The "Business Flow" section MUST carry a Mermaid flowchart, but the prompt's
+# MANDATORY is only a soft constraint (~14% of feature pages skipped it). After
+# generation we detect a feature page whose FIRST section lacks a mermaid block and
+# do ONE targeted repair call, accepting the result only if it's actually improved.
+_FLOW_REPAIR = os.environ.get("WIKI_FLOW_REPAIR", "1").lower() not in ("0", "false", "no", "off")
+_MERMAID_FENCE = re.compile(r"```[ \t]*mermaid", re.I)
+
+
+def _first_h2_section(content: str) -> Optional[str]:
+    """Body of the first H2 section (Business Flow, by template order), up to the
+    next H2. None when the page has no H2 headings at all."""
+    m = re.search(r"(?m)^##[ \t]+\S.*$", content)
+    if not m:
+        return None
+    start = m.end()
+    nxt = re.search(r"(?m)^##[ \t]+\S", content[start:])
+    return content[start: start + nxt.start()] if nxt else content[start:]
+
+
+def _feature_missing_flow_diagram(content: str) -> bool:
+    sec = _first_h2_section(content)
+    if sec is None:
+        return True
+    return _MERMAID_FENCE.search(sec) is None
+
+
+def build_flow_repair_prompt(page_title: str, content: str, language: str) -> str:
+    lang = language_label(language)
+    return f"""The wiki page below is missing its MANDATORY business-flow diagram. Its FIRST section (the "Business Flow" / 业务流程 section) MUST contain at least one Mermaid flowchart (graph TD) that visualizes the numbered steps and their branches.
+
+Return the COMPLETE page again in {lang}, IDENTICAL to the input EXCEPT that you insert ONE correct Mermaid flowchart into the Business Flow section (right after its step list). Do NOT change any other section, wording, or the `Sources:` citations, and do NOT drop content.
+
+Mermaid rules: use `graph TD` (top-down, never LR), max 3-4 words per node, wrap any label containing special characters (@ / ( ) : etc.) in double quotes, and do NOT backslash-escape characters inside labels. Output ONLY the markdown page — no code fence around the whole page, no preface.
+
+<page_to_fix>
+{content}
+</page_to_fix>"""
+
+
+async def _maybe_repair_flow(client, base, req, page, content: str) -> str:
+    """For a feature page missing its business-flow diagram, try one repair call.
+    Returns the repaired page only if it now has the diagram and kept its substance;
+    otherwise the original content (never worse)."""
+    if not _FLOW_REPAIR or normalize_page_type(page.get("type", "feature")) != "feature":
+        return content
+    if not _feature_missing_flow_diagram(content):
+        return content
+    try:
+        fixed = _strip_md_fence(await stream_chat(
+            client, base, req, build_flow_repair_prompt(page.get("title", ""), content, req.language)))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("flow-repair for '%s' failed: %s", page.get("title"), e)
+        return content
+    if fixed.strip() and not _feature_missing_flow_diagram(fixed) and len(fixed) >= 0.7 * len(content):
+        logger.info("flow-repair added a business-flow diagram to '%s'", page.get("title"))
+        return fixed
+    logger.info("flow-repair did not improve '%s'; keeping original", page.get("title"))
+    return content
+
+
+async def _gen_page(client, base, req, page, default_branch, retries: int, extra_context: str = "",
+                    instruction: str = "") -> Tuple[str, bool]:
     file_paths_list = "\n".join(
         f"- [{p}]({generate_file_url(req.repo_url, req.repo_type, default_branch, p)})" for p in page["filePaths"]
     )
-    prompt = build_page_prompt(page["title"], file_paths_list, req.language)
+    prompt = build_page_prompt(page["title"], file_paths_list, req.language, page.get("type", "feature"),
+                               extra_context, instruction)
     last_err = ""
     for attempt in range(retries + 1):
         try:
             content = _strip_md_fence(await stream_chat(client, base, req, prompt))
             if content.strip():
+                content = await _maybe_repair_flow(client, base, req, page, content)
                 return content, True
             last_err = "empty response"
         except Exception as e:  # noqa: BLE001
@@ -590,7 +747,9 @@ The repository's functional surface — route / page / menu / view files. Treat 
 {readme}
 </readme>{surface_block}
 
-List every module: each menu entry, route and management screen (lists, detail/edit pages, approval/workflow, dictionaries, permissions & roles, reports, dashboards, settings, etc.), plus foundational topics (Overview, Architecture, Setup, Data Model, API Integration, Auth & Permissions, Deployment). Use the routes/pages/menu above as the authoritative map. Produce as many modules as the system genuinely has, up to {max_modules}.
+List every FUNCTIONAL / BUSINESS module: each menu entry, route and management screen (lists, detail/edit pages, approval/workflow, dictionaries, permissions & roles, reports, dashboards, settings, etc.), plus genuinely cross-cutting concerns that are NOT foundational (e.g. Data Model, API Integration, Authentication & Permissions). Use the routes/pages/menu above as the authoritative map. Produce as many modules as the system genuinely has, up to {max_modules}.
+
+{SKIP_FOUNDATIONAL_NOTE}
 
 The wiki content will be generated in {lang} language.
 
@@ -624,7 +783,9 @@ Module description: {module_description}
 Candidate files for this module:
 {files_block}
 
-Create 1 to {max_pages_per_module} wiki pages that fully document this module (its screens, sub-features, data flow, key APIs). If the module is simple, ONE page is enough; if it has several distinct sub-features, split them into separate pages. Do NOT invent unrelated pages.
+Create 1 to {max_pages_per_module} wiki pages that fully document this module. If the module is simple, ONE page is enough; if it has several distinct sub-features, split them into separate pages. Do NOT invent unrelated pages, and do NOT split every module into the same generic "architecture / API / data model" pages — pick pages (and their type) that fit THIS module.
+
+{_TYPE_VOCAB}
 
 The wiki content will be generated in {lang} language.
 
@@ -634,6 +795,7 @@ Return ONLY this XML (no markdown fences, no prose before/after):
     <title>[Page title]</title>
     <description>[Brief description]</description>
     <importance>high|medium|low</importance>
+    <type>overview|architecture|feature|reference|cross-cutting|guide</type>
     <relevant_files>
       <file_path>[a real file for this page]</file_path>
     </relevant_files>
@@ -693,6 +855,7 @@ def parse_module_pages(response_text: str, module_id: str) -> list:
             "filePaths": [t for t in (_text(e) for e in page_el.iter("file_path")) if t],
             "importance": imp if imp in ("high", "low") else "medium",
             "relatedPages": [t for t in (_text(e) for e in page_el.iter("related")) if t],
+            "type": normalize_page_type(_text(page_el.find("type"))),
         })
     return pages
 
@@ -759,6 +922,7 @@ async def plan_two_phase(client, base, req: GenerateRequest, file_tree: str, rea
             return mod, [{
                 "id": f"{mod['id']}-p1", "title": mod["title"], "content": "",
                 "filePaths": mod["files"][:8], "importance": "medium", "relatedPages": [],
+                "type": "feature",
             }]
 
     results = await asyncio.gather(*(expand(m) for m in modules))
@@ -909,7 +1073,8 @@ async def _discover_new(client, base: str, req: GenerateRequest, added: set, str
                 mp = []
             if not mp:
                 mp = [{"id": f"newmod-{idx}-p1", "title": mod["title"], "content": "",
-                       "filePaths": (mod["files"] or [])[:8], "importance": "medium", "relatedPages": []}]
+                       "filePaths": (mod["files"] or [])[:8], "importance": "medium", "relatedPages": [],
+                       "type": "feature"}]
             return mod, mp
 
     results = await asyncio.gather(*(expand(m, i) for i, m in enumerate(modules)))
@@ -1020,7 +1185,7 @@ async def _run_incremental(job: Job, ctx: JobContext, req: GenerateRequest, clie
                 generated[pg["id"]] = {
                     "id": pg["id"], "title": pg.get("title", ""), "content": content,
                     "filePaths": pg.get("filePaths") or [], "importance": pg.get("importance", "medium"),
-                    "relatedPages": pg.get("relatedPages") or [],
+                    "relatedPages": pg.get("relatedPages") or [], "type": pg.get("type", "feature"),
                 }
                 ctx.page_done(failed=not ok)
 
@@ -1041,6 +1206,234 @@ async def _run_incremental(job: Job, ctx: JobContext, req: GenerateRequest, clie
                      commit_id=new_sha, default_branch=branch, generated_at=int(time.time() * 1000))
 
 
+# --- foundational scaffold (guaranteed onboarding / architecture / ops pages) ---
+# Relying on LLM "module discovery" to also surface foundational pages does NOT work
+# in practice (business modules crowd them out — real wikis came back with ZERO
+# overview/architecture/deployment pages). So we GUARANTEE a fixed set of foundational
+# pages, auto-pick their source files from the file tree, and prepend them to the wiki.
+
+SCAFFOLD_STRUCTURE_ID = "found-structure"  # this page gets the file tree injected
+SCAFFOLD_GLOSSARY_ID = "found-glossary"    # this page gets i18n labels + module map injected
+
+# Ordered spec. `patterns` (regex, case-insensitive) are matched against file-tree
+# lines in priority order to pick each page's relevant_files. `section` groups pages.
+_FOUNDATIONAL = [
+    {"id": "found-overview", "type": "overview", "section": "intro",
+     "titles": {"zh": "项目概述", "zh-tw": "專案概述", "en": "Overview"},
+     "patterns": [r"(^|/)README", r"(^|/)package\.json$", r"(^|/)pyproject\.toml$", r"nuxt\.config\.", r"(^|/)composer\.json$"]},
+    {"id": "found-getting-started", "type": "guide", "section": "intro",
+     "titles": {"zh": "快速上手", "zh-tw": "快速上手", "en": "Getting Started"},
+     "patterns": [r"本地开发", r"本地開發", r"CONTRIBUTING", r"(^|/)run\.sh$", r"(^|/)Makefile$", r"(^|/)package\.json$",
+                  r"\.env", r"docker-compose", r"(^|/)README"]},
+    {"id": SCAFFOLD_STRUCTURE_ID, "type": "reference", "section": "intro",
+     "titles": {"zh": "项目结构与目录地图", "zh-tw": "專案結構與目錄地圖", "en": "Project Structure"},
+     "patterns": [r"(^|/)package\.json$", r"nuxt\.config\.", r"(^|/)api/main\.py$", r"(^|/)api/api\.py$",
+                  r"(^|/)main\.(py|ts|js|go)$", r"(^|/)README"]},
+    {"id": SCAFFOLD_GLOSSARY_ID, "type": "glossary", "section": "intro",
+     "titles": {"zh": "术语表与业务名词", "zh-tw": "術語表與業務名詞", "en": "Glossary"},
+     "patterns": [r"(^|/)i18n", r"(^|/)locales?(/|$)", r"(dict|dictionary|字典)", r"(enum|const(ant)?s?|types?)\.",
+                  r"(router|routes|menu)", r"(^|/)README"]},
+    {"id": "found-architecture", "type": "architecture", "section": "ops",
+     "titles": {"zh": "系统架构", "zh-tw": "系統架構", "en": "Architecture"},
+     "patterns": [r"nuxt\.config\.", r"(^|/)api/main\.py$", r"(^|/)api/api\.py$", r"(^|/)main\.(py|ts|js|go)$",
+                  r"docker-compose", r"(^|/)README"]},
+    {"id": "found-configuration", "type": "reference", "section": "ops",
+     "titles": {"zh": "配置与环境变量", "zh-tw": "設定與環境變數", "en": "Configuration & Environment"},
+     "patterns": [r"\.env", r"(^|/)api/config\.py$", r"nuxt\.config\.", r"litellm-config", r"(^|/)config(/|\.|$)",
+                  r"\.ya?ml$", r"(^|/)settings\."]},
+    {"id": "found-deployment", "type": "guide", "section": "ops",
+     "titles": {"zh": "部署与运维", "zh-tw": "部署與維運", "en": "Deployment & Operations"},
+     "patterns": [r"(^|/)Dockerfile", r"docker-compose", r"(^|/)run\.sh$", r"\.github/workflows", r"(gitlab-ci|Jenkinsfile)",
+                  r"(^|/)api/config\.py$"]},
+]
+
+_SCAFFOLD_SECTIONS = {
+    "intro": {"id": "found-intro", "titles": {"zh": "概述与入门", "zh-tw": "概述與入門", "en": "Getting Started"}},
+    "ops": {"id": "found-arch-ops", "titles": {"zh": "架构与部署", "zh-tw": "架構與部署", "en": "Architecture & Operations"}},
+}
+
+_DEFAULT_FOUNDATIONAL = [s["id"] for s in _FOUNDATIONAL]
+
+# The topics discovery must NOT re-create (they are scaffolded), and near-exact titles
+# used to drop any that slip through. Cross-cutting concerns (auth, API, data model) are
+# intentionally absent — those stay discoverable and become cross-cutting pages.
+SKIP_FOUNDATIONAL_NOTE = (
+    "Do NOT create foundational/onboarding pages — project overview, getting started / setup, "
+    "system architecture, deployment / operations, project structure, configuration / environment, "
+    "or glossary. Those are generated separately. List ONLY the actual functional / business modules."
+)
+
+_FOUNDATIONAL_ALIASES = {
+    "项目概述", "概述", "项目简介", "简介", "overview", "projectoverview", "introduction",
+    "快速上手", "快速开始", "入门", "gettingstarted", "quickstart", "setup", "installation",
+    "系统架构", "架构设计", "架构", "系統架構", "architecture", "systemarchitecture",
+    "部署", "部署与运维", "部署与部署", "部署運維", "deployment", "deploymentoperations", "deploy",
+    "项目结构", "目录结构", "目录地图", "專案結構", "projectstructure", "codebasemap", "directorystructure",
+    "配置", "配置与环境变量", "环境变量", "設定與環境變數", "configuration", "configurationenvironment", "environment",
+    "术语表", "术语", "術語表", "glossary", "terminology",
+}
+
+
+def _norm_title(t: str) -> str:
+    return re.sub(r"[\s\-_/:：、，,.。()（）]+", "", (t or "")).lower()
+
+
+def _scaffold_title(spec: dict, language: str) -> str:
+    return spec["titles"].get(language) or spec["titles"].get("en", spec["id"])
+
+
+def _detect_files(file_tree: str, patterns: list, limit: int = 8) -> list:
+    """Pick up to `limit` file-tree paths matching `patterns`, in pattern priority
+    order (so authoritative files like README/run.sh/Dockerfile come first)."""
+    lines = [ln.strip() for ln in (file_tree or "").splitlines() if ln.strip()]
+    out, seen = [], set()
+    for pat in patterns:
+        rx = re.compile(pat, re.I)
+        for ln in lines:
+            if ln in seen:
+                continue
+            if rx.search(ln):
+                out.append(ln)
+                seen.add(ln)
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def selected_foundational(spec_value: str) -> list:
+    """Parse GenerateRequest.foundational -> list of scaffold ids. "" => all; a
+    comma list selects specific ones (short names like "overview" allowed)."""
+    raw = (spec_value or "").strip().lower()
+    if raw in ("none", "off", "0", "false", "no"):
+        return []
+    if not raw:
+        return list(_DEFAULT_FOUNDATIONAL)
+    wanted = {p.strip() for p in raw.split(",") if p.strip()}
+    wanted = {w if w.startswith("found-") else f"found-{w}" for w in wanted}
+    return [s["id"] for s in _FOUNDATIONAL if s["id"] in wanted]
+
+
+def build_scaffold(file_tree: str, language: str, include_ids: Optional[list] = None):
+    """Return (pages, sections) for the guaranteed foundational pages. Each page is a
+    normal page dict (empty content, filled during generation)."""
+    include = set(_DEFAULT_FOUNDATIONAL if include_ids is None else include_ids)
+    pages, section_pages = [], {}
+    for spec in _FOUNDATIONAL:
+        if spec["id"] not in include:
+            continue
+        pages.append({
+            "id": spec["id"], "title": _scaffold_title(spec, language), "content": "",
+            "filePaths": _detect_files(file_tree, spec["patterns"]),
+            "importance": "high", "relatedPages": [], "type": spec["type"],
+        })
+        section_pages.setdefault(spec["section"], []).append(spec["id"])
+    sections = []
+    for skey in ("intro", "ops"):
+        pids = section_pages.get(skey)
+        if not pids:
+            continue
+        sdef = _SCAFFOLD_SECTIONS[skey]
+        sections.append({"id": sdef["id"], "title": _scaffold_title(sdef, language),
+                         "pages": pids, "subsections": None})
+    return pages, sections
+
+
+def prepend_scaffold(structure: dict, scaffold_pages: list, scaffold_sections: list) -> dict:
+    """Put the scaffold pages/sections at the TOP of the wiki and drop any discovered
+    page whose title is (near-)exactly a foundational one, so we don't duplicate."""
+    if not scaffold_pages:
+        return structure
+    found_titles = {_norm_title(p["title"]) for p in scaffold_pages} | _FOUNDATIONAL_ALIASES
+    orig_pages = structure.get("pages") or []
+    dropped = {p["id"] for p in orig_pages if _norm_title(p.get("title", "")) in found_titles}
+    kept_pages = [p for p in orig_pages if p["id"] not in dropped]
+    structure["pages"] = scaffold_pages + kept_pages
+
+    scaffold_ids = {s["id"] for s in scaffold_sections}
+    new_secs = []
+    for sec in structure.get("sections") or []:
+        if sec["id"] in scaffold_ids:
+            continue  # never happens, but keep scaffold authoritative
+        sp = [pid for pid in (sec.get("pages") or []) if pid not in dropped]
+        if sp:
+            sec["pages"] = sp
+            new_secs.append(sec)
+    structure["sections"] = scaffold_sections + new_secs
+    kept_root = [sid for sid in (structure.get("rootSections") or []) if sid in {s["id"] for s in new_secs}]
+    structure["rootSections"] = [s["id"] for s in scaffold_sections] + kept_root
+    return structure
+
+
+def _trim_tree(file_tree: str, max_lines: int = 300) -> str:
+    lines = [ln for ln in (file_tree or "").splitlines() if ln.strip()]
+    if len(lines) <= max_lines:
+        return "\n".join(lines)
+    return "\n".join(lines[:max_lines]) + f"\n… (+{len(lines) - max_lines} more files)"
+
+
+# --- glossary enrichment: i18n labels + module map -> comprehensive term source ---
+
+_I18N_RE = re.compile(r"(^|/)(i18n|locales?|lang|translations?)(/|$)", re.I)
+_LOCALE_FILE_RE = re.compile(r"(^|/)(zh|zh-cn|zh-tw|en|en-us|ja|ko|kr|fr|es|ru|vi|pt|pt-br)\.json$", re.I)
+
+
+def _flatten_labels(obj, out: list, seen: set, limit: int) -> None:
+    """Collect (leaf-key, short-string-value) pairs from a nested locale object."""
+    if len(out) >= limit:
+        return
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            _flatten_labels(v, out, seen, limit)
+            if len(out) >= limit:
+                return
+    elif isinstance(obj, list):
+        for v in obj:
+            _flatten_labels(v, out, seen, limit)
+    elif isinstance(obj, str):
+        s = obj.strip()
+        if s and len(s) <= 40 and s not in seen:
+            seen.add(s)
+            out.append(s)
+
+
+def _collect_i18n_labels(clone_dir: str, file_tree: str, language: str = "", limit: int = 500) -> list:
+    """Flatten locale/i18n JSON files (key→label dictionaries) into a deduped list of
+    short human labels — the richest source of business terms for the glossary."""
+    if not clone_dir or not os.path.isdir(clone_dir):
+        return []
+    files = [ln.strip() for ln in (file_tree or "").splitlines()
+             if ln.strip().lower().endswith(".json") and (_I18N_RE.search(ln) or _LOCALE_FILE_RE.search(ln.strip()))]
+    lang = (language or "").lower().split("-")[0]
+    files.sort(key=lambda p: 0 if lang and lang in p.lower() else 1)  # prefer the wiki's language
+    out, seen = [], set()
+    for rel in files[:20]:
+        try:
+            with open(os.path.join(clone_dir, rel), "r", encoding="utf-8", errors="ignore") as f:
+                data = json.load(f)
+        except Exception:  # noqa: BLE001 — skip unparseable locale files
+            continue
+        _flatten_labels(data, out, seen, limit)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def build_glossary_context(clone_dir: str, file_tree: str, structure: dict, language: str = "",
+                           max_labels: int = 500) -> str:
+    """Authoritative term sources for the glossary page: the full module/page map plus
+    the project's i18n labels. Injected as extra context so the term list is complete."""
+    parts = []
+    titles = [p.get("title", "") for p in (structure.get("pages") or []) if p.get("title")]
+    if titles:
+        parts.append("Documented modules / pages (each is a domain area — extract its key terms):\n"
+                     + "\n".join(f"- {t}" for t in titles[:200]))
+    labels = _collect_i18n_labels(clone_dir, file_tree, language, max_labels)
+    if labels:
+        parts.append("UI / i18n labels (authoritative business terms — cover these):\n"
+                     + "\n".join(f"- {s}" for s in labels))
+    return "\n\n".join(parts)
+
+
 # --- the runner --------------------------------------------------------------
 
 def make_real_runner(*, self_base_url: Optional[str] = None, page_retries: int = 1):
@@ -1056,10 +1449,15 @@ def make_real_runner(*, self_base_url: Optional[str] = None, page_retries: int =
             await ctx.set_phase("fetching_repo")
             file_tree, readme, default_branch = await fetch_structure(client, base, req)
 
-            # indexing (clone + embed, in-process)
+            # indexing (clone + embed, in-process). A forced regenerate rebuilds the
+            # embedding index too (fresh clone + re-embed) so re-indexing/prompt changes
+            # actually take effect; a plain first-time gen reuses any cached index.
             await ctx.set_phase("indexing")
             try:
-                clone_dir = await asyncio.to_thread(index_repo, req)
+                if req.force:
+                    clone_dir, _ = await asyncio.to_thread(refresh_index, req)
+                else:
+                    clone_dir = await asyncio.to_thread(index_repo, req)
             except JobFailed:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -1091,25 +1489,74 @@ def make_real_runner(*, self_base_url: Optional[str] = None, page_retries: int =
                                         build_structure_prompt(req.owner, req.repo, file_tree, readme, req.language,
                                                                req.comprehensive, req.max_pages, surface))
                 structure = parse_structure(xml, req.comprehensive)
+
+            # Prepend the guaranteed foundational pages (overview, getting-started,
+            # architecture, deployment, structure, config, glossary) — discovery alone
+            # doesn't reliably produce them.
+            scaffold_pages, scaffold_sections = build_scaffold(
+                file_tree, req.language, selected_foundational(req.foundational))
+            structure = prepend_scaffold(structure, scaffold_pages, scaffold_sections)
+
             pages = structure["pages"]
             ctx.set_total_pages(len(pages))
             if not pages:
                 raise JobFailed("planning_failed", "Wiki structure contained no pages")
 
+            # Extra grounding for two scaffold pages: the structure page gets the file
+            # tree; the glossary page gets the module map + i18n labels (so it's complete).
+            tree_ctx = ("Project file tree (authoritative for directory structure and paths):\n"
+                        f"<file_tree>\n{_trim_tree(file_tree)}\n</file_tree>")
+            glossary_ctx = await asyncio.to_thread(
+                build_glossary_context, clone_dir, file_tree, structure, req.language)
+
+            def _extra_ctx(page):
+                if page["id"] == SCAFFOLD_STRUCTURE_ID:
+                    return tree_ctx
+                if page["id"] == SCAFFOLD_GLOSSARY_ID:
+                    return glossary_ctx
+                return ""
+
+            # Edit protection: carry over any page the user hand-edited (edited=True in
+            # the previous cache, matched by title) instead of regenerating & overwriting
+            # it. This also saves the LLM call for those pages.
+            locked = {}
+            try:
+                old = await _load_cache(client, base, req)
+                for op in ((old or {}).get("generated_pages") or {}).values():
+                    if op.get("edited"):
+                        locked[_norm_title(op.get("title", ""))] = op
+            except Exception:  # noqa: BLE001 — protection is best-effort
+                locked = {}
+            if locked:
+                logger.info("full regen: carrying over %d manually-edited page(s)", len(locked))
+
             # generating — pages in parallel (bounded), since a comprehensive wiki can
             # be dozens of pages and sequential generation would take far too long.
             await ctx.set_phase("generating")
             generated = {}
+            now_ms = int(time.time() * 1000)
             sem = asyncio.Semaphore(PAGE_CONCURRENCY)
 
             async def gen_one(page):
                 async with sem:
                     ctx.set_current_page(page["title"])
-                    content, ok = await _gen_page(client, base, req, page, default_branch, page_retries)
+                    lk = locked.get(_norm_title(page.get("title", "")))
+                    if lk is not None:  # keep the manual edit, skip the LLM
+                        generated[page["id"]] = {
+                            "id": page["id"], "title": page["title"], "content": lk.get("content", ""),
+                            "filePaths": page["filePaths"], "importance": page["importance"],
+                            "relatedPages": page["relatedPages"], "type": page.get("type", "feature"),
+                            "edited": True, "updated_at": lk.get("updated_at"),
+                            "prev_content": lk.get("prev_content"),
+                        }
+                        ctx.page_done()
+                        return
+                    content, ok = await _gen_page(client, base, req, page, default_branch, page_retries, _extra_ctx(page))
                     generated[page["id"]] = {
                         "id": page["id"], "title": page["title"], "content": content,
                         "filePaths": page["filePaths"], "importance": page["importance"],
-                        "relatedPages": page["relatedPages"],
+                        "relatedPages": page["relatedPages"], "type": page.get("type", "feature"),
+                        "edited": False, "updated_at": now_ms,
                     }
                     ctx.page_done(failed=not ok)
 

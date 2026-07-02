@@ -78,6 +78,10 @@ class GenerateRequest(BaseModel):
     max_pages_per_module: int = 3  # two-phase: upper bound on pages per module
     mode: str = "full"  # "full" | "incremental" (incremental: diff old commit -> regen affected pages)
     force: bool = False
+    # Guaranteed foundational pages (overview, getting-started, architecture, deployment,
+    # structure, configuration, glossary). "" = default set; "none"/"off" = disable;
+    # else a comma list of ids/short-names. See wiki_generator.build_scaffold.
+    foundational: str = ""
 
 
 @dataclass(frozen=True)

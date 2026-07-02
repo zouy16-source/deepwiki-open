@@ -1,7 +1,7 @@
 // Orchestrates the wiki page data: load from server cache, else fetch the repo
 // structure and generate pages over WebSocket, plus export. Ported from the
 // stateful logic of src/app/[owner]/[repo]/page.tsx (the render lives in the page).
-import type { RepoInfo, WikiPage, WikiSection, WikiStructure } from '~/types/wiki'
+import type { HistoryEntry, RepoInfo, WikiPage, WikiSection, WikiStructure } from '~/types/wiki'
 
 export interface WikiDataOptions {
   owner: string
@@ -96,7 +96,7 @@ export function useWikiData(opts: WikiDataOptions) {
     generatedPages.value = { ...generatedPages.value, [page.id]: { ...page, content: 'Loading...' } }
     try {
       const filePathsList = page.filePaths.map((p) => `- [${p}](${generateFileUrl(p)})`).join('\n')
-      const prompt = buildPagePrompt({ pageTitle: page.title, filePathsList, language: opts.language })
+      const prompt = buildPagePrompt({ pageTitle: page.title, filePathsList, language: opts.language, pageType: page.type })
       let content = await streamChat(baseUrl, buildRequest(prompt))
       content = content.replace(/^```markdown\s*/i, '').replace(/```\s*$/i, '')
       generatedPages.value = { ...generatedPages.value, [page.id]: { ...page, content } }
@@ -152,11 +152,12 @@ export function useWikiData(opts: WikiDataOptions) {
         const pTitle = pageEl.querySelector('title')?.textContent || ''
         const impText = pageEl.querySelector('importance')?.textContent
         const importance = impText === 'high' ? 'high' : impText === 'low' ? 'low' : 'medium'
+        const type = normalizePageType(pageEl.querySelector('type')?.textContent || undefined)
         const filePaths: string[] = []
         pageEl.querySelectorAll('file_path').forEach((el) => el.textContent && filePaths.push(el.textContent))
         const relatedPages: string[] = []
         pageEl.querySelectorAll('related').forEach((el) => el.textContent && relatedPages.push(el.textContent))
-        pages.push({ id, title: pTitle, content: '', filePaths, importance, relatedPages })
+        pages.push({ id, title: pTitle, content: '', filePaths, importance, relatedPages, type })
       })
 
       const sections: WikiSection[] = []
@@ -473,12 +474,108 @@ export function useWikiData(opts: WikiDataOptions) {
     if (currentPageId.value !== id) currentPageId.value = id
   }
 
+  // --- per-page edit / regenerate / revert (Wikipedia-style refinement) ---
+  const pageBusy = ref<string | null>(null) // page id currently being acted on
+  const pageActionError = ref<string | null>(null)
+
+  function applyPageUpdate(page: WikiPage) {
+    generatedPages.value = { ...generatedPages.value, [page.id]: page }
+    const sp = wikiStructure.value?.pages.find((p) => p.id === page.id)
+    if (sp) {
+      sp.title = page.title
+      sp.type = page.type
+      sp.edited = page.edited
+      sp.updated_at = page.updated_at
+    }
+  }
+
+  function baseBody() {
+    const r = effectiveRepoInfo.value
+    return { owner: r.owner, repo: r.repo, repo_type: r.type, language: opts.language }
+  }
+
+  async function savePageEdit(pageId: string, content: string, title?: string) {
+    pageBusy.value = pageId
+    pageActionError.value = null
+    try {
+      const res = await $fetch<{ page: WikiPage }>('/api/wiki/page', {
+        method: 'PUT',
+        body: { ...baseBody(), page_id: pageId, content, title },
+      })
+      applyPageUpdate(res.page)
+      return true
+    } catch (err) {
+      pageActionError.value = err instanceof Error ? err.message : '保存失败'
+      return false
+    } finally {
+      pageBusy.value = null
+    }
+  }
+
+  async function regeneratePage(pageId: string, instruction = '') {
+    pageBusy.value = pageId
+    pageActionError.value = null
+    try {
+      const r = effectiveRepoInfo.value
+      const res = await $fetch<{ page: WikiPage }>('/api/wiki/page/regenerate', {
+        method: 'POST',
+        // regeneration is one LLM call but can take ~30s+; give it room.
+        timeout: 180_000,
+        body: {
+          ...baseBody(),
+          page_id: pageId,
+          repo_url: r.repoUrl || '',
+          token: r.token || '',
+          provider: provider.value,
+          model: model.value,
+          instruction,
+        },
+      })
+      applyPageUpdate(res.page)
+      return true
+    } catch (err) {
+      pageActionError.value = err instanceof Error ? err.message : '重新生成失败'
+      return false
+    } finally {
+      pageBusy.value = null
+    }
+  }
+
+  async function revertPage(pageId: string, at?: number) {
+    pageBusy.value = pageId
+    pageActionError.value = null
+    try {
+      const res = await $fetch<{ page: WikiPage }>('/api/wiki/page/revert', {
+        method: 'POST',
+        body: { ...baseBody(), page_id: pageId, at },
+      })
+      applyPageUpdate(res.page)
+      return true
+    } catch (err) {
+      pageActionError.value = err instanceof Error ? err.message : '回滚失败'
+      return false
+    } finally {
+      pageBusy.value = null
+    }
+  }
+
+  async function fetchPageHistory(pageId: string): Promise<HistoryEntry[]> {
+    const b = baseBody()
+    const params = new URLSearchParams({
+      owner: b.owner, repo: b.repo, repo_type: b.repo_type, language: b.language, page_id: pageId,
+    })
+    const res = await $fetch<{ entries: HistoryEntry[] }>(`/api/wiki/page/history?${params.toString()}`)
+    return res.entries || []
+  }
+
   return {
     // state
     isLoading, loadingMessage, error, embeddingError,
     wikiStructure, currentPageId, generatedPages, pagesInProgress,
     effectiveRepoInfo, defaultBranch, isExporting, exportError, provider, model,
+    pageBusy, pageActionError,
     // actions
     generateFileUrl, loadData, exportWiki, selectPage,
+    savePageEdit, regeneratePage, revertPage, fetchPageHistory,
   }
 }

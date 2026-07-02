@@ -9,6 +9,8 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 import google.generativeai as genai
 import asyncio
+import time
+import httpx
 
 # Configure logging
 from api.logging_config import setup_logging
@@ -47,6 +49,10 @@ class WikiPage(BaseModel):
     filePaths: List[str]
     importance: str # Should ideally be Literal['high', 'medium', 'low']
     relatedPages: List[str]
+    type: Optional[str] = None  # page archetype: overview|architecture|feature|reference|cross-cutting|guide|glossary
+    edited: Optional[bool] = None       # True = manually edited (locked from full regeneration)
+    updated_at: Optional[int] = None    # unix ms of the last edit / single-page regenerate
+    prev_content: Optional[str] = None  # previous content, kept for one-level undo / revert
 
 class ProcessedProjectEntry(BaseModel):
     id: str  # Filename
@@ -506,11 +512,37 @@ async def store_wiki_cache(request_data: WikiCacheRequest):
         request_data.language = configs["lang_config"]["default"]
 
     logger.info(f"Attempting to save wiki cache for {request_data.repo.owner}/{request_data.repo.repo} ({request_data.repo.type}), lang: {request_data.language}")
+    r = request_data.repo
+    # Snapshot the prior cache to record generation history (only for pages that
+    # actually changed — carried-over edited/unchanged pages get no new entry).
+    prior = await read_wiki_cache(r.owner, r.repo, r.type, request_data.language)
+    prior_pages = prior.generated_pages if prior else {}
     success = await save_wiki_cache(request_data)
-    if success:
-        return {"message": "Wiki cache saved successfully"}
-    else:
+    if not success:
         raise HTTPException(status_code=500, detail="Failed to save wiki cache")
+    try:
+        at = _now_ms()
+        hist = _read_history(r.owner, r.repo, r.type, request_data.language)
+        changed = 0
+        for pid, pg in request_data.generated_pages.items():
+            old = prior_pages.get(pid)
+            if old is not None and old.content == pg.content:
+                continue  # unchanged (e.g. edit-locked carry-over) — no timeline noise
+            action = "regenerated" if old is not None else "generated"
+            entries = hist.get(pid) or []
+            entries.append({
+                "at": at, "action": action, "source": "ai", "actor": None,
+                "model": request_data.model, "provider": request_data.provider,
+                "summary": "AI 生成" if action == "generated" else "AI 重新生成",
+                "size": len(pg.content or ""), "content": pg.content,
+            })
+            hist[pid] = entries[-HISTORY_CAP:]
+            changed += 1
+        if changed:
+            _write_history(r.owner, r.repo, r.type, request_data.language, hist)
+    except Exception as e:  # noqa: BLE001 — history is best-effort, never fail the save
+        logger.warning(f"Failed to record generation history: {e}")
+    return {"message": "Wiki cache saved successfully"}
 
 @app.delete("/api/wiki_cache")
 async def delete_wiki_cache(
@@ -548,9 +580,254 @@ async def delete_wiki_cache(
         logger.warning(f"Wiki cache not found, cannot delete: {cache_path}")
         raise HTTPException(status_code=404, detail="Wiki cache not found")
 
+
+# --- Per-page edit / regenerate / revert (Wikipedia-style page refinement) ----
+# The wiki cache stores one entry per page, so a single page can be updated without
+# re-running the whole (slow) generation. Regenerate reuses the existing embedding
+# index — one LLM call — and optionally takes a user instruction. Manual edits set
+# `edited=True`, which a full regeneration skips (see wiki_generator).
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _write_cache_file(owner: str, repo: str, repo_type: str, language: str, cached: WikiCacheData) -> bool:
+    cache_path = get_wiki_cache_path(owner, repo, repo_type, language)
+    try:
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(cached.model_dump(), f, indent=2)
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Failed to write wiki cache {cache_path}: {e}", exc_info=True)
+        return False
+
+
+def _mirror_structure_meta(cached: WikiCacheData, page: WikiPage) -> None:
+    """Keep the sidebar copy (wiki_structure.pages) in sync with edit/regenerate
+    metadata (title/type/edited/updated_at) — content itself lives in generated_pages."""
+    for sp in cached.wiki_structure.pages:
+        if sp.id == page.id:
+            sp.title = page.title
+            sp.type = page.type
+            sp.edited = page.edited
+            sp.updated_at = page.updated_at
+            break
+
+
+# --- per-page history / audit timeline (stored in a SEPARATE file, loaded on demand
+# so it never bloats the main cache) -------------------------------------------------
+# Each entry answers who / when / what: action + source(ai|human) + actor(null until
+# auth) + model (the AI "who") + a content snapshot for diff & revert-to-any-version.
+HISTORY_CAP = 10  # snapshots kept per page (oldest dropped)
+
+
+class HistoryEntry(BaseModel):
+    at: int                          # unix ms
+    action: str                      # generated | regenerated | edited | reverted
+    source: str                      # ai | human
+    actor: Optional[str] = None      # username/email — null until an auth system exists
+    model: Optional[str] = None      # AI model that produced it (the "who" for ai)
+    provider: Optional[str] = None
+    summary: str = ""                # e.g. the regenerate instruction, or "手动编辑"
+    size: int = 0                    # content length (quick timeline stat)
+    content: Optional[str] = None    # snapshot, for diffing and revert-to-this-version
+
+
+def get_history_path(owner: str, repo: str, repo_type: str, language: str) -> str:
+    return os.path.join(WIKI_CACHE_DIR, f"deepwiki_history_{repo_type}_{owner}_{repo}_{language}.json")
+
+
+def _read_history(owner: str, repo: str, repo_type: str, language: str) -> Dict[str, Any]:
+    path = get_history_path(owner, repo, repo_type, language)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f) or {}
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Error reading history {path}: {e}")
+    return {}
+
+
+def _write_history(owner: str, repo: str, repo_type: str, language: str, data: Dict[str, Any]) -> None:
+    path = get_history_path(owner, repo, repo_type, language)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Error writing history {path}: {e}", exc_info=True)
+
+
+def _record_history(owner: str, repo: str, repo_type: str, language: str, page_id: str, *,
+                    action: str, source: str, content: str, at: Optional[int] = None,
+                    summary: str = "", model: Optional[str] = None,
+                    provider: Optional[str] = None, actor: Optional[str] = None) -> None:
+    """Append one timeline entry for a page (read-modify-write the history file)."""
+    data = _read_history(owner, repo, repo_type, language)
+    entries = data.get(page_id) or []
+    entries.append({
+        "at": at or _now_ms(), "action": action, "source": source, "actor": actor,
+        "model": model, "provider": provider, "summary": summary,
+        "size": len(content or ""), "content": content,
+    })
+    data[page_id] = entries[-HISTORY_CAP:]
+    _write_history(owner, repo, repo_type, language, data)
+
+
+class PageEditRequest(BaseModel):
+    owner: str
+    repo: str
+    repo_type: str = "github"
+    language: str = "en"
+    page_id: str
+    content: str
+    title: Optional[str] = None
+
+
+class PageRevertRequest(BaseModel):
+    owner: str
+    repo: str
+    repo_type: str = "github"
+    language: str = "en"
+    page_id: str
+    at: Optional[int] = None  # target history-entry timestamp; None = one-level (prev_content)
+
+
+class PageRegenerateRequest(BaseModel):
+    owner: str
+    repo: str
+    repo_type: str = "github"
+    language: str = "en"
+    page_id: str
+    repo_url: str = ""
+    token: str = ""
+    provider: str = ""
+    model: str = ""
+    instruction: str = ""  # optional reader guidance ("the flow is wrong, …", "add edge cases")
+
+
+async def _load_page_or_404(req) -> tuple:
+    cached = await read_wiki_cache(req.owner, req.repo, req.repo_type, req.language)
+    if not cached:
+        raise HTTPException(status_code=404, detail="Wiki cache not found")
+    page = cached.generated_pages.get(req.page_id)
+    if page is None:
+        raise HTTPException(status_code=404, detail=f"Page '{req.page_id}' not found")
+    return cached, page
+
+
+@app.put("/api/wiki/page")
+async def edit_wiki_page(req: PageEditRequest):
+    """Save a manually-edited page. Marks it `edited` (locked from full regeneration)
+    and keeps the previous content for one-level revert."""
+    cached, page = await _load_page_or_404(req)
+    page.prev_content = page.content
+    page.content = req.content
+    if req.title:
+        page.title = req.title
+    page.edited = True
+    page.updated_at = _now_ms()
+    _mirror_structure_meta(cached, page)
+    if not _write_cache_file(req.owner, req.repo, req.repo_type, req.language, cached):
+        raise HTTPException(status_code=500, detail="Failed to save page")
+    _record_history(req.owner, req.repo, req.repo_type, req.language, req.page_id,
+                    action="edited", source="human", content=page.content,
+                    at=page.updated_at, summary="手动编辑")
+    return {"message": "Page saved", "page": page}
+
+
+@app.post("/api/wiki/page/revert")
+async def revert_wiki_page(req: PageRevertRequest):
+    """Restore a previous version. With `at`, restore that history snapshot
+    (revert-to-any-version); without, swap the one-level prev_content."""
+    cached, page = await _load_page_or_404(req)
+    if req.at is not None:
+        entries = _read_history(req.owner, req.repo, req.repo_type, req.language).get(req.page_id) or []
+        target = next((e for e in entries if e.get("at") == req.at), None)
+        if not target or target.get("content") is None:
+            raise HTTPException(status_code=404, detail="History version not found")
+        new_content = target["content"]
+        summary = f"回滚到 {datetime.fromtimestamp(req.at / 1000).strftime('%Y-%m-%d %H:%M')}"
+    else:
+        if not page.prev_content:
+            raise HTTPException(status_code=400, detail="No previous version to revert to")
+        new_content = page.prev_content
+        summary = "回滚到上一版"
+    page.prev_content = page.content
+    page.content = new_content
+    page.edited = True
+    page.updated_at = _now_ms()
+    _mirror_structure_meta(cached, page)
+    if not _write_cache_file(req.owner, req.repo, req.repo_type, req.language, cached):
+        raise HTTPException(status_code=500, detail="Failed to save page")
+    _record_history(req.owner, req.repo, req.repo_type, req.language, req.page_id,
+                    action="reverted", source="human", content=new_content,
+                    at=page.updated_at, summary=summary)
+    return {"message": "Page reverted", "page": page}
+
+
+@app.post("/api/wiki/page/regenerate")
+async def regenerate_wiki_page(req: PageRegenerateRequest):
+    """Regenerate ONE page with a single LLM call, reusing the existing embedding
+    index. Optional `instruction` steers the fix. Overwrites content (edited=False)
+    but keeps the previous version for revert."""
+    cached, page = await _load_page_or_404(req)
+
+    page_dict = {
+        "id": page.id,
+        "title": page.title,
+        "type": page.type or "feature",
+        "filePaths": page.filePaths or [],
+        "importance": page.importance or "medium",
+        "relatedPages": page.relatedPages or [],
+    }
+    gen_req = GenerateRequest(
+        owner=req.owner, repo=req.repo, repo_type=req.repo_type, language=req.language,
+        repo_url=req.repo_url or (cached.repo.repoUrl if cached.repo else None) or cached.repo_url or "",
+        token=req.token or (cached.repo.token if cached.repo else None) or "",
+        provider=req.provider or cached.provider or "",
+        model=req.model or cached.model or "",
+    )
+    default_branch = cached.default_branch or "main"
+
+    async with httpx.AsyncClient() as client:
+        content, ok = await _gen_page(
+            client, SELF_BASE_URL, gen_req, page_dict, default_branch, 1,
+            extra_context="", instruction=req.instruction,
+        )
+    if not ok:
+        raise HTTPException(status_code=502, detail=f"Regeneration failed: {content}")
+
+    page.prev_content = page.content
+    page.content = content
+    page.edited = False  # freshly AI-generated
+    page.updated_at = _now_ms()
+    _mirror_structure_meta(cached, page)
+    if not _write_cache_file(req.owner, req.repo, req.repo_type, req.language, cached):
+        raise HTTPException(status_code=500, detail="Failed to save regenerated page")
+    _record_history(req.owner, req.repo, req.repo_type, req.language, req.page_id,
+                    action="regenerated", source="ai", content=content, at=page.updated_at,
+                    model=gen_req.model or cached.model, provider=gen_req.provider or cached.provider,
+                    summary=(req.instruction.strip() or "重新生成"))
+    return {"message": "Page regenerated", "content": content, "page": page}
+
+
+@app.get("/api/wiki/page/history")
+async def get_wiki_page_history(
+    owner: str = Query(...),
+    repo: str = Query(...),
+    repo_type: str = Query(...),
+    language: str = Query(...),
+    page_id: str = Query(...),
+):
+    """Return a page's change timeline (oldest→newest), each entry with a content
+    snapshot for client-side diff and revert-to-version."""
+    entries = _read_history(owner, repo, repo_type, language).get(page_id) or []
+    return {"entries": entries}
+
+
 # --- Wiki Generation Job System --- (background tasks; see docs/wiki-jobs-api.md)
 from api.wiki_jobs import JobManager, GenerateRequest, make_fake_runner, JobKey
-from api.wiki_generator import make_real_runner
+from api.wiki_generator import make_real_runner, _gen_page, SELF_BASE_URL
 
 
 def _wiki_cache_exists(key: JobKey) -> bool:
