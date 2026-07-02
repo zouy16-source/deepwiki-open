@@ -16,7 +16,7 @@ function q(key: string): string {
 const owner = String(route.params.owner || '')
 const repo = String(route.params.repo || '')
 const repoType = q('type') || 'github'
-const language = q('language') || 'en'
+const language = 'zh'
 const provider = q('provider')
 const model = q('model')
 const isCustomModel = q('is_custom_model') === 'true'

@@ -61,7 +61,7 @@ class GenerateRequest(BaseModel):
     repo_type: str = "github"
     owner: str
     repo: str
-    language: str = "en"
+    language: str = "zh"  # cache-identity plumbing only — generated content is always Chinese
     comprehensive: bool = True
     provider: str = ""
     model: str = ""

@@ -68,7 +68,7 @@ export function addTokensToRequestBody(
   body.provider = opts.provider || ''
   body.model = opts.model || ''
   if (opts.isCustomModel && opts.customModel) body.custom_model = opts.customModel
-  body.language = opts.language || 'en'
+  body.language = opts.language || 'zh'
   if (opts.excludedDirs) body.excluded_dirs = opts.excludedDirs
   if (opts.excludedFiles) body.excluded_files = opts.excludedFiles
   if (opts.includedDirs) body.included_dirs = opts.includedDirs

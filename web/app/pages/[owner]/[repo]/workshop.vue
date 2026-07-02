@@ -15,7 +15,7 @@ function q(key: string): string {
 const owner = String(route.params.owner || '')
 const repo = String(route.params.repo || '')
 const repoType = q('type') || 'github'
-const language = q('language') || 'en'
+const language = 'zh'
 const provider = q('provider')
 const model = q('model')
 const isCustomModel = q('is_custom_model') === 'true'
@@ -97,7 +97,7 @@ async function generate() {
     const body: ChatStreamRequest = {
       repo_url: getRepoUrl(repoInfo),
       type: repoInfo.type,
-      messages: [{ role: 'user', content: buildWorkshopPrompt({ owner, repo, wikiContent, language }) }],
+      messages: [{ role: 'user', content: buildWorkshopPrompt({ owner, repo, wikiContent }) }],
     }
     addTokensToRequestBody(body, { token: repoInfo.token || '', provider, model, isCustomModel, customModel, language })
     const content = await streamChat(baseUrl, body, (full) => { workshopContent.value = full })

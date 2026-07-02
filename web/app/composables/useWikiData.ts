@@ -96,7 +96,7 @@ export function useWikiData(opts: WikiDataOptions) {
     generatedPages.value = { ...generatedPages.value, [page.id]: { ...page, content: 'Loading...' } }
     try {
       const filePathsList = page.filePaths.map((p) => `- [${p}](${generateFileUrl(p)})`).join('\n')
-      const prompt = buildPagePrompt({ pageTitle: page.title, filePathsList, language: opts.language, pageType: page.type })
+      const prompt = buildPagePrompt({ pageTitle: page.title, filePathsList, pageType: page.type })
       let content = await streamChat(baseUrl, buildRequest(prompt))
       content = content.replace(/^```markdown\s*/i, '').replace(/```\s*$/i, '')
       generatedPages.value = { ...generatedPages.value, [page.id]: { ...page, content } }
@@ -124,7 +124,6 @@ export function useWikiData(opts: WikiDataOptions) {
         repo: opts.repo,
         fileTree,
         readme,
-        language: opts.language,
         isComprehensive: opts.isComprehensive,
       })
       let responseText = await streamChat(baseUrl, buildRequest(prompt))

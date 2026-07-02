@@ -26,7 +26,7 @@ const provider = q('provider')
 const model = q('model')
 const isCustomModel = q('is_custom_model') === 'true'
 const customModel = q('custom_model')
-const language = q('language') || 'en'
+const language = 'zh' // wikis are Chinese-only; kept as cache-identity plumbing
 const isComprehensive = q('comprehensive') !== 'false'
 const excludedDirs = q('excluded_dirs')
 const excludedFiles = q('excluded_files')

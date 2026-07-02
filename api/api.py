@@ -677,7 +677,7 @@ class PageEditRequest(BaseModel):
     owner: str
     repo: str
     repo_type: str = "github"
-    language: str = "en"
+    language: str = "zh"
     page_id: str
     content: str
     title: Optional[str] = None
@@ -687,7 +687,7 @@ class PageRevertRequest(BaseModel):
     owner: str
     repo: str
     repo_type: str = "github"
-    language: str = "en"
+    language: str = "zh"
     page_id: str
     at: Optional[int] = None  # target history-entry timestamp; None = one-level (prev_content)
 
@@ -696,7 +696,7 @@ class PageRegenerateRequest(BaseModel):
     owner: str
     repo: str
     repo_type: str = "github"
-    language: str = "en"
+    language: str = "zh"
     page_id: str
     repo_url: str = ""
     token: str = ""

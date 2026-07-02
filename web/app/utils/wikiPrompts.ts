@@ -1,15 +1,14 @@
 // Generation prompts ported verbatim from src/app/[owner]/[repo]/page.tsx and the
-// slides/workshop pages.
-import { languageLabel } from '~/utils/repo'
+// slides/workshop pages. All generated content is hardcoded Chinese (China-region
+// audience) — no i18n switching.
 
 // Workshop markdown prompt (ported from workshop/page.tsx).
 export function buildWorkshopPrompt(opts: {
   owner: string
   repo: string
   wikiContent: string
-  language: string
 }): string {
-  const { owner, repo, wikiContent, language } = opts
+  const { owner, repo, wikiContent } = opts
   return `Create a comprehensive workshop for learning how to use and contribute to the ${owner}/${repo} repository.
 
 I'll provide you with information from the project's wiki to help you create a more accurate and relevant workshop.
@@ -71,7 +70,7 @@ IMPORTANT CONTENT GUIDELINES:
 4. The final project should be challenging but achievable
 5. Ensure the workshop is specific to this repository, not generic
 
-Make the workshop content in ${languageLabel(language)} language.`
+Make the workshop content in Chinese (中文).`
 }
 
 // Slide-plan prompt: returns a numbered list of slide titles (ported from slides/page.tsx).
@@ -159,25 +158,25 @@ export function normalizePageType(value?: string): PagePromptType {
   return (PAGE_TYPES as string[]).includes(t) ? (t as PagePromptType) : 'feature'
 }
 
-// "{lang}" is substituted; the section HEADINGS themselves must be written in {lang}.
+// All headings are FIXED Chinese — the model must copy them verbatim.
 const PAGE_BODY: Record<PagePromptType, string> = {
-  feature: `This is a FEATURE / SCREEN / business-module page. Structure the WHOLE page as a traceable chain and use THESE THREE H2 sections in EXACTLY this order (write each heading in {lang}; canonical names: Business Flow / Code Responsibilities / Test Flow). Do NOT merge, reorder, or replace them with a generic outline:
+  feature: `This is a FEATURE / SCREEN / business-module page. Structure the WHOLE page as a traceable chain and use THESE THREE H2 sections in EXACTLY this order, with EXACTLY these Chinese headings copied VERBATIM (never English names like "Business Flow"). Do NOT merge, reorder, or replace them with a generic outline:
 
-## Business Flow
-- Describe what the feature does as a NUMBERED business/user flow — Step 1, Step 2, … — including decision branches, the roles/actors involved, preconditions, and key business rules.
-- MANDATORY: include at least one Mermaid flowchart (\`graph TD\`) that visualizes this flow with its steps and branches. If the flow crosses front-end / back-end / third-party systems, ALSO add a \`sequenceDiagram\`. A Business Flow section with NO diagram is unacceptable.
+## 业务流程
+- Describe what the feature does as a NUMBERED business/user flow — 步骤1、步骤2、… — including decision branches, the roles/actors involved, preconditions, and key business rules.
+- MANDATORY: include at least one Mermaid flowchart (\`graph TD\`) that visualizes this flow with its steps and branches. If the flow crosses front-end / back-end / third-party systems, ALSO add a \`sequenceDiagram\`. A 业务流程 section with NO diagram is unacceptable.
 
-## Code Responsibilities
-- Map EACH numbered business step above to the code that implements it, as a Markdown table with columns: business step | file / component / function | responsibility & key logic | Sources.
+## 代码职责
+- Map EACH numbered business step above to the code that implements it, as a Markdown table with columns: 业务步骤 | 文件/组件/函数 | 职责与关键逻辑 | Sources.
 - Show how the parts collaborate (e.g. page/component → API wrapper → backend endpoint); add a Mermaid \`sequenceDiagram\` or a call-chain \`graph TD\` when it clarifies the call path.
 - Call out WHERE to change / extend behaviour (the key extension points).
 
-## Test Flow
-- Describe how to verify the feature as test scenarios that trace back to the business steps/rules above, as a Markdown table with columns: scenario | preconditions | steps | expected result.
+## 测试流程
+- Describe how to verify the feature as test scenarios that trace back to the business steps/rules above, as a Markdown table with columns: 场景 | 前置条件 | 步骤 | 预期结果.
 - Cover the happy path AND edge / exception cases (empty data, no permission, role differences, concurrency, failure handling).
 - Add a test flowchart (\`graph TD\`) when the flow has non-trivial conditional branches.
 
-Keep the three sections traceable: the SAME numbered steps should be referenceable across Business Flow → Code Responsibilities → Test Flow, so a reader can follow one step end to end.`,
+Keep the three sections traceable: the SAME numbered steps should be referenceable across 业务流程 → 代码职责 → 测试流程, so a reader can follow one step end to end.`,
 
   reference: `This is a REFERENCE page (API / data model / configuration). Prefer STRUCTURED TABLES over prose — keep narrative to a minimum:
 - API: one row per endpoint/method with request params, response fields, and error codes.
@@ -208,7 +207,7 @@ Keep it high-level and leave the details to the linked pages.`,
 
   glossary: `This is the project GLOSSARY / business-terminology page. Be COMPREHENSIVE — readers expect FULL coverage, not a handful of terms; do NOT summarize or stop early.
 - Enumerate EVERY distinct domain / business term, entity, status, role and acronym used across the project. Draw them from the module list and the UI / i18n labels in the ADDITIONAL CONTEXT below, plus entities, fields, enums and statuses in the source files.
-- GROUP terms by domain (e.g. accounts, waybills, numbering & recycling, sales, system / permissions, …) with an H2 or H3 per group; within each group use a Markdown table with columns: term | EN / abbreviation | definition | where it is used.
+- GROUP terms by domain (e.g. 账户、面单、单号与回收、销售、系统与权限 …) with a Chinese H2 or H3 per group; within each group use a Markdown table with columns: 术语 | 英文/缩写 | 定义 | 所属模块.
 - Link the "where it is used" cell to the relevant wiki page with \`[Link Text](#page-anchor-or-id)\` when possible.
 - Include acronyms and bilingual mappings (e.g. SSO, VIP, GIS; 面单 / waybill). Aim for breadth — a real business system has dozens of terms; cover the labels listed in the context.`,
 }
@@ -220,7 +219,7 @@ AVOID DUPLICATION: shared mechanisms — authentication & permissions, front-end
 // Shared page-type vocabulary injected into the structure prompt so each page gets an
 // archetype; buildPagePrompt then picks a distinct structure per type.
 const TYPE_VOCAB = `Classify EACH page with a <type> from: overview | architecture | feature | reference | cross-cutting | guide.
-- feature: a screen / business feature (MOST module pages) — written as Business Flow → Code Responsibilities → Test Flow, with a mandatory flowchart.
+- feature: a screen / business feature (MOST module pages) — written as 业务流程 → 代码职责 → 测试流程, with a mandatory flowchart.
 - reference: an API, data-model, or configuration reference (mostly tables).
 - cross-cutting: a shared mechanism documented ONCE and linked from elsewhere (authentication & permissions, front-end/back-end communication, environment/config).
 - overview / architecture / guide: foundational topics (project overview, system architecture, setup/deployment).
@@ -231,13 +230,11 @@ Create AT MOST ONE cross-cutting page per shared mechanism — do NOT repeat aut
 export function buildPagePrompt(opts: {
   pageTitle: string
   filePathsList: string
-  language: string
   pageType?: string
 }): string {
-  const { pageTitle, filePathsList, language } = opts
+  const { pageTitle, filePathsList } = opts
   const ptype = normalizePageType(opts.pageType)
-  const lang = languageLabel(language)
-  const body = PAGE_BODY[ptype].replace(/\{lang\}/g, lang)
+  const body = PAGE_BODY[ptype]
   const dedup = ptype === 'cross-cutting' ? '' : DEDUP_RULE
   return `You are an expert technical writer and software architect.
 Your task is to generate a comprehensive and accurate technical wiki page in Markdown format about a specific feature, system, or module within a given software project.
@@ -250,10 +247,10 @@ CRITICAL STARTING INSTRUCTION:
 The very first thing on the page MUST be a \`<details>\` block listing ALL the \`[RELEVANT_SOURCE_FILES]\` you used to generate the content. There MUST be AT LEAST 5 source files listed - if fewer were provided, you MUST find additional related files to include.
 Format it exactly like this:
 <details>
-<summary>Relevant source files</summary>
+<summary>相关源文件</summary>
 
 Remember, do not provide any acknowledgements, disclaimers, apologies, or any other preface before the \`<details>\` block. JUST START with the \`<details>\` block.
-The following files were used as context for generating this wiki page:
+以下文件用于生成本页面时作为上下文参考：
 
 ${filePathsList}
 <!-- Add additional relevant files if fewer than 5 were provided -->
@@ -284,7 +281,7 @@ FORMATTING RULES (apply to all of the above):
 - **Technical Accuracy:** Derive everything SOLELY from the source files — do not infer or invent.
 - **Clarity:** Clear, professional, concise technical language.
 
-IMPORTANT: Generate the content in ${lang} language (including all section headings).
+IMPORTANT: 全部内容必须使用中文撰写（包括所有章节标题、表格列名、图表说明）。不要出现英文标题（如 "Business Flow"、"Overview"）；代码标识符、文件路径、API 名称保持原样即可。
 
 Remember:
 - Ground every claim in the provided source files.
@@ -299,10 +296,9 @@ export function buildStructurePrompt(opts: {
   repo: string
   fileTree: string
   readme: string
-  language: string
   isComprehensive: boolean
 }): string {
-  const { owner, repo, fileTree, readme, language, isComprehensive } = opts
+  const { owner, repo, fileTree, readme, isComprehensive } = opts
   const comprehensiveBlock = isComprehensive
     ? `
 Create a structured wiki with the following main sections:
@@ -389,7 +385,7 @@ ${readme}
 
 I want to create a wiki for this repository. Determine the most logical structure for a wiki based on the repository's content.
 
-IMPORTANT: The wiki content will be generated in ${languageLabel(language)} language.
+IMPORTANT: 所有页面标题（title）和描述（description）必须使用中文；wiki 内容将全部使用中文生成。
 
 When designing the wiki structure, include pages that would benefit from visual diagrams, such as:
 - Architecture overviews

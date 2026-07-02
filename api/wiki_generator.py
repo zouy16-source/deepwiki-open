@@ -47,23 +47,9 @@ PAGE_CONCURRENCY = int(os.environ.get("WIKI_PAGE_CONCURRENCY", "3"))
 # How many modules to expand concurrently during two-phase planning.
 PLAN_CONCURRENCY = int(os.environ.get("WIKI_PLAN_CONCURRENCY", "4"))
 
-LANGUAGE_LABELS = {
-    "en": "English",
-    "ja": "Japanese (日本語)",
-    "zh": "Mandarin Chinese (中文)",
-    "zh-tw": "Traditional Chinese (繁體中文)",
-    "es": "Spanish (Español)",
-    "kr": "Korean (한국어)",
-    "vi": "Vietnamese (Tiếng Việt)",
-    "pt-br": "Brazilian Portuguese (Português Brasileiro)",
-    "fr": "Français (French)",
-    "ru": "Русский (Russian)",
-}
-
-
-def language_label(code: str) -> str:
-    return LANGUAGE_LABELS.get(code, "English")
-
+# Wikis are Chinese-only (China-region audience). The `language` field on requests
+# remains as cache-identity plumbing (filenames end in `_zh`), but all generated
+# content and prompt headings are hardcoded Chinese — no i18n switching.
 
 # --- source-file URL resolver (ported from useWikiData.generateFileUrl) -------
 
@@ -90,20 +76,9 @@ def generate_file_url(repo_url: str, repo_type: str, default_branch: str, file_p
 
 # --- prompts (ported verbatim from wikiPrompts.ts) ---------------------------
 
-# Localized labels for the "Relevant source files" <details> block so the header
-# and intro line match the wiki's language.
-_DETAILS_LABELS = {
-    "zh": ("相关源文件", "以下文件用于生成本页面时作为上下文参考："),
-    "zh-tw": ("相關原始檔", "以下檔案用於生成本頁面時作為上下文參考："),
-    "en": ("Relevant source files", "The following files were used as context for generating this wiki page:"),
-    "ja": ("関連ソースファイル", "このwikiページの生成にコンテキストとして使用されたファイル："),
-    "es": ("Archivos fuente relevantes", "Los siguientes archivos se usaron como contexto para generar esta página:"),
-    "kr": ("관련 소스 파일", "이 위키 페이지를 생성하는 데 사용된 파일:"),
-    "vi": ("Tệp nguồn liên quan", "Các tệp sau được dùng làm ngữ cảnh để tạo trang wiki này:"),
-    "pt-br": ("Arquivos-fonte relevantes", "Os seguintes arquivos foram usados como contexto para gerar esta página:"),
-    "fr": ("Fichiers sources pertinents", "Les fichiers suivants ont servi de contexte pour générer cette page :"),
-    "ru": ("Соответствующие исходные файлы", "Следующие файлы использованы как контекст для создания этой страницы:"),
-}
+# Fixed Chinese labels for the "相关源文件" <details> block.
+_DETAILS_SUMMARY = "相关源文件"
+_DETAILS_INTRO = "以下文件用于生成本页面时作为上下文参考："
 
 
 # --- page archetypes -----------------------------------------------------------
@@ -125,26 +100,26 @@ def normalize_page_type(value: str) -> str:
     return t if t in PAGE_TYPES else "feature"
 
 
-# Per-type body instructions (the middle of the page). "{lang}" is substituted; the
-# section HEADINGS themselves must be written by the model in {lang}.
+# Per-type body instructions (the middle of the page). All headings are FIXED
+# Chinese — the model must copy them verbatim, never translate or anglicize.
 _PAGE_BODY = {
-    "feature": """This is a FEATURE / SCREEN / business-module page. Structure the WHOLE page as a traceable chain and use THESE THREE H2 sections in EXACTLY this order (write each heading in {lang}; canonical names: Business Flow / Code Responsibilities / Test Flow). Do NOT merge, reorder, or replace them with a generic outline:
+    "feature": """This is a FEATURE / SCREEN / business-module page. Structure the WHOLE page as a traceable chain and use THESE THREE H2 sections in EXACTLY this order, with EXACTLY these Chinese headings copied VERBATIM (never English names like "Business Flow"). Do NOT merge, reorder, or replace them with a generic outline:
 
-## Business Flow
-- Describe what the feature does as a NUMBERED business/user flow — Step 1, Step 2, … — including decision branches, the roles/actors involved, preconditions, and key business rules.
-- MANDATORY: include at least one Mermaid flowchart (`graph TD`) that visualizes this flow with its steps and branches. If the flow crosses front-end / back-end / third-party systems, ALSO add a `sequenceDiagram`. A Business Flow section with NO diagram is unacceptable.
+## 业务流程
+- Describe what the feature does as a NUMBERED business/user flow — 步骤1、步骤2、… — including decision branches, the roles/actors involved, preconditions, and key business rules.
+- MANDATORY: include at least one Mermaid flowchart (`graph TD`) that visualizes this flow with its steps and branches. If the flow crosses front-end / back-end / third-party systems, ALSO add a `sequenceDiagram`. A 业务流程 section with NO diagram is unacceptable.
 
-## Code Responsibilities
-- Map EACH numbered business step above to the code that implements it, as a Markdown table with columns: business step | file / component / function | responsibility & key logic | Sources.
+## 代码职责
+- Map EACH numbered business step above to the code that implements it, as a Markdown table with columns: 业务步骤 | 文件/组件/函数 | 职责与关键逻辑 | Sources.
 - Show how the parts collaborate (e.g. page/component → API wrapper → backend endpoint); add a Mermaid `sequenceDiagram` or a call-chain `graph TD` when it clarifies the call path.
 - Call out WHERE to change / extend behaviour (the key extension points).
 
-## Test Flow
-- Describe how to verify the feature as test scenarios that trace back to the business steps/rules above, as a Markdown table with columns: scenario | preconditions | steps | expected result.
+## 测试流程
+- Describe how to verify the feature as test scenarios that trace back to the business steps/rules above, as a Markdown table with columns: 场景 | 前置条件 | 步骤 | 预期结果.
 - Cover the happy path AND edge / exception cases (empty data, no permission, role differences, concurrency, failure handling).
 - Add a test flowchart (`graph TD`) when the flow has non-trivial conditional branches.
 
-Keep the three sections traceable: the SAME numbered steps should be referenceable across Business Flow → Code Responsibilities → Test Flow, so a reader can follow one step end to end.""",
+Keep the three sections traceable: the SAME numbered steps should be referenceable across 业务流程 → 代码职责 → 测试流程, so a reader can follow one step end to end.""",
 
     "reference": """This is a REFERENCE page (API / data model / configuration). Prefer STRUCTURED TABLES over prose — keep narrative to a minimum:
 - API: one row per endpoint/method with request params, response fields, and error codes.
@@ -175,7 +150,7 @@ Keep it high-level and leave the details to the linked pages.""",
 
     "glossary": """This is the project GLOSSARY / business-terminology page. Be COMPREHENSIVE — readers expect FULL coverage, not a handful of terms; do NOT summarize or stop early.
 - Enumerate EVERY distinct domain / business term, entity, status, role and acronym used across the project. Draw them from the documented module list AND the UI / i18n labels given in the ADDITIONAL CONTEXT below, plus entities, fields, enums and statuses in the source files.
-- GROUP terms by domain (e.g. accounts, waybills, numbering & recycling, sales, system / permissions, …) with an H2 or H3 per group; within each group use a Markdown table with columns: term | EN / abbreviation | definition | where it is used.
+- GROUP terms by domain (e.g. 账户、面单、单号与回收、销售、系统与权限 …) with a Chinese H2 or H3 per group; within each group use a Markdown table with columns: 术语 | 英文/缩写 | 定义 | 所属模块.
 - Link the "where it is used" cell to the relevant wiki page with `[Link Text](#page-anchor-or-id)` when possible.
 - Include acronyms and bilingual mappings (e.g. SSO, VIP, GIS; 面单 / waybill). Aim for breadth — a real business system has dozens of terms; if the context lists many labels, cover them.""",
 }
@@ -187,12 +162,10 @@ AVOID DUPLICATION: shared mechanisms — authentication & permissions, front-end
 """
 
 
-def build_page_prompt(page_title: str, file_paths_list: str, language: str,
+def build_page_prompt(page_title: str, file_paths_list: str,
                       page_type: str = "feature", extra_context: str = "", instruction: str = "") -> str:
-    lang = language_label(language)
     ptype = normalize_page_type(page_type)
-    summary_label, intro_line = _DETAILS_LABELS.get(language, _DETAILS_LABELS["en"])
-    body = _PAGE_BODY[ptype].replace("{lang}", lang)
+    body = _PAGE_BODY[ptype]
     dedup = "" if ptype == "cross-cutting" else _DEDUP_RULE
     extra = f"""
 ADDITIONAL CONTEXT (authoritative — use it to be accurate and COMPLETE; still cite concrete source files where relevant):
@@ -212,9 +185,9 @@ You will be given:
 CRITICAL STARTING INSTRUCTION:
 Do NOT write any acknowledgements, disclaimers, apologies, or any preface. The VERY FIRST thing on the page MUST be a `<details>` block listing ALL the `[RELEVANT_SOURCE_FILES]` you used (AT LEAST 5; if fewer were provided, find additional related files). Output the block EXACTLY like this and put NOTHING inside it except the summary line, the intro line, and the file list (do NOT copy any of these instructions into the block):
 <details>
-<summary>{summary_label}</summary>
+<summary>{_DETAILS_SUMMARY}</summary>
 
-{intro_line}
+{_DETAILS_INTRO}
 
 {file_paths_list}
 </details>
@@ -245,7 +218,7 @@ FORMATTING RULES (apply to all of the above):
 - **Technical Accuracy:** Derive everything SOLELY from the source files — do not infer or invent.
 - **Clarity:** Clear, professional, concise technical language.
 
-IMPORTANT: Generate the content in {lang} language (including all section headings).
+IMPORTANT: 全部内容必须使用中文撰写（包括所有章节标题、表格列名、图表说明）。不要出现英文标题（如 "Business Flow"、"Overview"）；代码标识符、文件路径、API 名称保持原样即可。
 
 Remember:
 - Ground every claim in the provided source files.
@@ -308,7 +281,7 @@ _XML_CONCISE = """<wiki_structure>
 # Shared page-type vocabulary injected into planning prompts so each page is tagged
 # with an archetype; build_page_prompt then picks a distinct structure per type.
 _TYPE_VOCAB = """Classify EACH page with a <type> from: overview | architecture | feature | reference | cross-cutting | guide.
-- feature: a screen / business feature (MOST module pages) — written as Business Flow → Code Responsibilities → Test Flow, with a mandatory flowchart.
+- feature: a screen / business feature (MOST module pages) — written as 业务流程 → 代码职责 → 测试流程, with a mandatory flowchart.
 - reference: an API, data-model, or configuration reference (mostly tables).
 - cross-cutting: a shared mechanism documented ONCE and linked from elsewhere (authentication & permissions, front-end/back-end communication, environment/config).
 - overview / architecture / guide: foundational topics (project overview, system architecture, setup/deployment).
@@ -316,11 +289,9 @@ Create AT MOST ONE cross-cutting page per shared mechanism — do NOT repeat aut
 
 
 def build_structure_prompt(
-    owner: str, repo: str, file_tree: str, readme: str, language: str, comprehensive: bool,
+    owner: str, repo: str, file_tree: str, readme: str, comprehensive: bool,
     max_pages: int = 40, functional_surface: str = "",
 ) -> str:
-    lang = language_label(language)
-
     if comprehensive:
         xml_format = _XML_COMPREHENSIVE
         coverage = f"""Create a COMPREHENSIVE, EXHAUSTIVE wiki that documents EVERY functional module of the system — not just the high-level or "core" themes.
@@ -364,7 +335,7 @@ Aim to cover the system FULLY. A real admin system typically needs 20-50 pages; 
 
 {SKIP_FOUNDATIONAL_NOTE}
 
-IMPORTANT: The wiki content will be generated in {lang} language.
+IMPORTANT: 所有页面标题（title）和描述（description）必须使用中文。
 
 When designing the wiki structure, include pages that would benefit from visual diagrams (architecture overviews, data flow, component relationships, process workflows, state machines, class hierarchies).
 
@@ -641,11 +612,10 @@ def _feature_missing_flow_diagram(content: str) -> bool:
     return _MERMAID_FENCE.search(sec) is None
 
 
-def build_flow_repair_prompt(page_title: str, content: str, language: str) -> str:
-    lang = language_label(language)
-    return f"""The wiki page below is missing its MANDATORY business-flow diagram. Its FIRST section (the "Business Flow" / 业务流程 section) MUST contain at least one Mermaid flowchart (graph TD) that visualizes the numbered steps and their branches.
+def build_flow_repair_prompt(page_title: str, content: str) -> str:
+    return f"""The wiki page below is missing its MANDATORY business-flow diagram. Its FIRST section (the 业务流程 section) MUST contain at least one Mermaid flowchart (graph TD) that visualizes the numbered steps and their branches.
 
-Return the COMPLETE page again in {lang}, IDENTICAL to the input EXCEPT that you insert ONE correct Mermaid flowchart into the Business Flow section (right after its step list). Do NOT change any other section, wording, or the `Sources:` citations, and do NOT drop content.
+Return the COMPLETE page again in Chinese (中文), IDENTICAL to the input EXCEPT that you insert ONE correct Mermaid flowchart into the 业务流程 section (right after its step list). Do NOT change any other section, wording, or the `Sources:` citations, and do NOT drop content.
 
 Mermaid rules: use `graph TD` (top-down, never LR), max 3-4 words per node, wrap any label containing special characters (@ / ( ) : etc.) in double quotes, and do NOT backslash-escape characters inside labels. Output ONLY the markdown page — no code fence around the whole page, no preface.
 
@@ -664,7 +634,7 @@ async def _maybe_repair_flow(client, base, req, page, content: str) -> str:
         return content
     try:
         fixed = _strip_md_fence(await stream_chat(
-            client, base, req, build_flow_repair_prompt(page.get("title", ""), content, req.language)))
+            client, base, req, build_flow_repair_prompt(page.get("title", ""), content)))
     except Exception as e:  # noqa: BLE001
         logger.warning("flow-repair for '%s' failed: %s", page.get("title"), e)
         return content
@@ -680,7 +650,7 @@ async def _gen_page(client, base, req, page, default_branch, retries: int, extra
     file_paths_list = "\n".join(
         f"- [{p}]({generate_file_url(req.repo_url, req.repo_type, default_branch, p)})" for p in page["filePaths"]
     )
-    prompt = build_page_prompt(page["title"], file_paths_list, req.language, page.get("type", "feature"),
+    prompt = build_page_prompt(page["title"], file_paths_list, page.get("type", "feature"),
                                extra_context, instruction)
     last_err = ""
     for attempt in range(retries + 1):
@@ -724,9 +694,8 @@ async def save_cache(client, base, req: GenerateRequest, structure: dict, genera
 
 # --- two-phase planning (discover modules -> expand each into pages) ----------
 
-def build_discover_prompt(owner: str, repo: str, file_tree: str, readme: str, language: str,
+def build_discover_prompt(owner: str, repo: str, file_tree: str, readme: str,
                           max_modules: int, functional_surface: str = "") -> str:
-    lang = language_label(language)
     surface_block = ""
     if functional_surface:
         surface_block = f"""
@@ -751,7 +720,7 @@ List every FUNCTIONAL / BUSINESS module: each menu entry, route and management s
 
 {SKIP_FOUNDATIONAL_NOTE}
 
-The wiki content will be generated in {lang} language.
+所有模块标题（title）和描述（description）必须使用中文。
 
 Return ONLY this XML (no markdown fences, no prose before/after):
 <modules>
@@ -773,8 +742,7 @@ Rules:
 
 
 def build_expand_prompt(owner: str, repo: str, module_title: str, module_description: str,
-                        module_files: list, language: str, max_pages_per_module: int) -> str:
-    lang = language_label(language)
+                        module_files: list, max_pages_per_module: int) -> str:
     files_block = "\n".join(f"- {f}" for f in module_files) if module_files else "(discover the relevant files from the codebase)"
     return f"""For the module "{module_title}" of repository {owner}/{repo}, plan its wiki pages. This is the SECOND pass — decompose THIS module only.
 
@@ -787,7 +755,7 @@ Create 1 to {max_pages_per_module} wiki pages that fully document this module. I
 
 {_TYPE_VOCAB}
 
-The wiki content will be generated in {lang} language.
+所有页面标题（title）和描述（description）必须使用中文。
 
 Return ONLY this XML (no markdown fences, no prose before/after):
 <pages>
@@ -894,14 +862,14 @@ async def plan_two_phase(client, base, req: GenerateRequest, file_tree: str, rea
     """Discover all modules (one focused call), then expand each into pages
     concurrently. Falls back to single-phase if discovery yields no modules."""
     dxml = await stream_chat(client, base, req,
-                             build_discover_prompt(req.owner, req.repo, file_tree, readme, req.language,
+                             build_discover_prompt(req.owner, req.repo, file_tree, readme,
                                                    req.max_modules, surface))
     meta, modules = parse_modules(dxml)
     modules = modules[: req.max_modules]
     if not modules:
         logger.warning("two-phase discovery found no modules; falling back to single-phase")
         xml = await stream_chat(client, base, req,
-                                build_structure_prompt(req.owner, req.repo, file_tree, readme, req.language,
+                                build_structure_prompt(req.owner, req.repo, file_tree, readme,
                                                        req.comprehensive, req.max_pages, surface))
         return parse_structure(xml, req.comprehensive)
 
@@ -912,7 +880,7 @@ async def plan_two_phase(client, base, req: GenerateRequest, file_tree: str, rea
             try:
                 xml = await stream_chat(client, base, req,
                                         build_expand_prompt(req.owner, req.repo, mod["title"], mod["description"],
-                                                            mod["files"], req.language, req.max_pages_per_module))
+                                                            mod["files"], req.max_pages_per_module))
                 mp = parse_module_pages(xml, mod["id"])
                 if mp:
                     return mod, mp
@@ -989,8 +957,7 @@ def refresh_index(req: GenerateRequest) -> Tuple[str, str]:
 # --- incremental Phase C: new modules from added files, prune deleted ----------
 
 def build_new_modules_prompt(owner: str, repo: str, added_files: list, existing_titles: list,
-                             language: str, max_modules: int) -> str:
-    lang = language_label(language)
+                             max_modules: int) -> str:
     existing = "\n".join(f"- {t}" for t in existing_titles if t) or "(none)"
     files = "\n".join(f"- {f}" for f in added_files)
     return f"""New files were added to repository {owner}/{repo}. Identify any NEW functional modules they introduce that are NOT already documented.
@@ -1003,7 +970,7 @@ The wiki ALREADY documents these modules — do NOT duplicate them:
 
 Return ONLY modules that are genuinely NEW (a new screen/route/feature not covered above). If the added files merely extend an existing module, return an EMPTY <modules></modules>.
 
-The wiki content will be generated in {lang} language.
+所有模块标题（title）和描述（description）必须使用中文。
 
 Return ONLY this XML (no fences, no prose):
 <modules>
@@ -1049,7 +1016,7 @@ async def _discover_new(client, base: str, req: GenerateRequest, added: set, str
     existing_titles = [pg.get("title", "") for pg in structure.get("pages") or []]
     dxml = await stream_chat(client, base, req,
                              build_new_modules_prompt(req.owner, req.repo, surface_added, existing_titles,
-                                                      req.language, req.max_modules))
+                                                      req.max_modules))
     try:
         _, modules = parse_modules(dxml)
     except JobFailed:
@@ -1065,7 +1032,7 @@ async def _discover_new(client, base: str, req: GenerateRequest, added: set, str
             try:
                 xml = await stream_chat(client, base, req,
                                         build_expand_prompt(req.owner, req.repo, mod["title"], mod["description"],
-                                                            mod["files"] or surface_added, req.language,
+                                                            mod["files"] or surface_added,
                                                             req.max_pages_per_module))
                 mp = parse_module_pages(xml, f"newmod-{idx}")
             except Exception as e:  # noqa: BLE001
@@ -1219,37 +1186,37 @@ SCAFFOLD_GLOSSARY_ID = "found-glossary"    # this page gets i18n labels + module
 # lines in priority order to pick each page's relevant_files. `section` groups pages.
 _FOUNDATIONAL = [
     {"id": "found-overview", "type": "overview", "section": "intro",
-     "titles": {"zh": "项目概述", "zh-tw": "專案概述", "en": "Overview"},
+     "title": "项目概述",
      "patterns": [r"(^|/)README", r"(^|/)package\.json$", r"(^|/)pyproject\.toml$", r"nuxt\.config\.", r"(^|/)composer\.json$"]},
     {"id": "found-getting-started", "type": "guide", "section": "intro",
-     "titles": {"zh": "快速上手", "zh-tw": "快速上手", "en": "Getting Started"},
+     "title": "快速上手",
      "patterns": [r"本地开发", r"本地開發", r"CONTRIBUTING", r"(^|/)run\.sh$", r"(^|/)Makefile$", r"(^|/)package\.json$",
                   r"\.env", r"docker-compose", r"(^|/)README"]},
     {"id": SCAFFOLD_STRUCTURE_ID, "type": "reference", "section": "intro",
-     "titles": {"zh": "项目结构与目录地图", "zh-tw": "專案結構與目錄地圖", "en": "Project Structure"},
+     "title": "项目结构与目录地图",
      "patterns": [r"(^|/)package\.json$", r"nuxt\.config\.", r"(^|/)api/main\.py$", r"(^|/)api/api\.py$",
                   r"(^|/)main\.(py|ts|js|go)$", r"(^|/)README"]},
     {"id": SCAFFOLD_GLOSSARY_ID, "type": "glossary", "section": "intro",
-     "titles": {"zh": "术语表与业务名词", "zh-tw": "術語表與業務名詞", "en": "Glossary"},
+     "title": "术语表与业务名词",
      "patterns": [r"(^|/)i18n", r"(^|/)locales?(/|$)", r"(dict|dictionary|字典)", r"(enum|const(ant)?s?|types?)\.",
                   r"(router|routes|menu)", r"(^|/)README"]},
     {"id": "found-architecture", "type": "architecture", "section": "ops",
-     "titles": {"zh": "系统架构", "zh-tw": "系統架構", "en": "Architecture"},
+     "title": "系统架构",
      "patterns": [r"nuxt\.config\.", r"(^|/)api/main\.py$", r"(^|/)api/api\.py$", r"(^|/)main\.(py|ts|js|go)$",
                   r"docker-compose", r"(^|/)README"]},
     {"id": "found-configuration", "type": "reference", "section": "ops",
-     "titles": {"zh": "配置与环境变量", "zh-tw": "設定與環境變數", "en": "Configuration & Environment"},
+     "title": "配置与环境变量",
      "patterns": [r"\.env", r"(^|/)api/config\.py$", r"nuxt\.config\.", r"litellm-config", r"(^|/)config(/|\.|$)",
                   r"\.ya?ml$", r"(^|/)settings\."]},
     {"id": "found-deployment", "type": "guide", "section": "ops",
-     "titles": {"zh": "部署与运维", "zh-tw": "部署與維運", "en": "Deployment & Operations"},
+     "title": "部署与运维",
      "patterns": [r"(^|/)Dockerfile", r"docker-compose", r"(^|/)run\.sh$", r"\.github/workflows", r"(gitlab-ci|Jenkinsfile)",
                   r"(^|/)api/config\.py$"]},
 ]
 
 _SCAFFOLD_SECTIONS = {
-    "intro": {"id": "found-intro", "titles": {"zh": "概述与入门", "zh-tw": "概述與入門", "en": "Getting Started"}},
-    "ops": {"id": "found-arch-ops", "titles": {"zh": "架构与部署", "zh-tw": "架構與部署", "en": "Architecture & Operations"}},
+    "intro": {"id": "found-intro", "title": "概述与入门"},
+    "ops": {"id": "found-arch-ops", "title": "架构与部署"},
 }
 
 _DEFAULT_FOUNDATIONAL = [s["id"] for s in _FOUNDATIONAL]
@@ -1276,10 +1243,6 @@ _FOUNDATIONAL_ALIASES = {
 
 def _norm_title(t: str) -> str:
     return re.sub(r"[\s\-_/:：、，,.。()（）]+", "", (t or "")).lower()
-
-
-def _scaffold_title(spec: dict, language: str) -> str:
-    return spec["titles"].get(language) or spec["titles"].get("en", spec["id"])
 
 
 def _detect_files(file_tree: str, patterns: list, limit: int = 8) -> list:
@@ -1313,7 +1276,7 @@ def selected_foundational(spec_value: str) -> list:
     return [s["id"] for s in _FOUNDATIONAL if s["id"] in wanted]
 
 
-def build_scaffold(file_tree: str, language: str, include_ids: Optional[list] = None):
+def build_scaffold(file_tree: str, include_ids: Optional[list] = None):
     """Return (pages, sections) for the guaranteed foundational pages. Each page is a
     normal page dict (empty content, filled during generation)."""
     include = set(_DEFAULT_FOUNDATIONAL if include_ids is None else include_ids)
@@ -1322,7 +1285,7 @@ def build_scaffold(file_tree: str, language: str, include_ids: Optional[list] = 
         if spec["id"] not in include:
             continue
         pages.append({
-            "id": spec["id"], "title": _scaffold_title(spec, language), "content": "",
+            "id": spec["id"], "title": spec["title"], "content": "",
             "filePaths": _detect_files(file_tree, spec["patterns"]),
             "importance": "high", "relatedPages": [], "type": spec["type"],
         })
@@ -1333,7 +1296,7 @@ def build_scaffold(file_tree: str, language: str, include_ids: Optional[list] = 
         if not pids:
             continue
         sdef = _SCAFFOLD_SECTIONS[skey]
-        sections.append({"id": sdef["id"], "title": _scaffold_title(sdef, language),
+        sections.append({"id": sdef["id"], "title": sdef["title"],
                          "pages": pids, "subsections": None})
     return pages, sections
 
@@ -1396,15 +1359,14 @@ def _flatten_labels(obj, out: list, seen: set, limit: int) -> None:
             out.append(s)
 
 
-def _collect_i18n_labels(clone_dir: str, file_tree: str, language: str = "", limit: int = 500) -> list:
+def _collect_i18n_labels(clone_dir: str, file_tree: str, limit: int = 500) -> list:
     """Flatten locale/i18n JSON files (key→label dictionaries) into a deduped list of
     short human labels — the richest source of business terms for the glossary."""
     if not clone_dir or not os.path.isdir(clone_dir):
         return []
     files = [ln.strip() for ln in (file_tree or "").splitlines()
              if ln.strip().lower().endswith(".json") and (_I18N_RE.search(ln) or _LOCALE_FILE_RE.search(ln.strip()))]
-    lang = (language or "").lower().split("-")[0]
-    files.sort(key=lambda p: 0 if lang and lang in p.lower() else 1)  # prefer the wiki's language
+    files.sort(key=lambda p: 0 if "zh" in p.lower() else 1)  # prefer Chinese locale files
     out, seen = [], set()
     for rel in files[:20]:
         try:
@@ -1418,7 +1380,7 @@ def _collect_i18n_labels(clone_dir: str, file_tree: str, language: str = "", lim
     return out
 
 
-def build_glossary_context(clone_dir: str, file_tree: str, structure: dict, language: str = "",
+def build_glossary_context(clone_dir: str, file_tree: str, structure: dict,
                            max_labels: int = 500) -> str:
     """Authoritative term sources for the glossary page: the full module/page map plus
     the project's i18n labels. Injected as extra context so the term list is complete."""
@@ -1427,7 +1389,7 @@ def build_glossary_context(clone_dir: str, file_tree: str, structure: dict, lang
     if titles:
         parts.append("Documented modules / pages (each is a domain area — extract its key terms):\n"
                      + "\n".join(f"- {t}" for t in titles[:200]))
-    labels = _collect_i18n_labels(clone_dir, file_tree, language, max_labels)
+    labels = _collect_i18n_labels(clone_dir, file_tree, max_labels)
     if labels:
         parts.append("UI / i18n labels (authoritative business terms — cover these):\n"
                      + "\n".join(f"- {s}" for s in labels))
@@ -1486,7 +1448,7 @@ def make_real_runner(*, self_base_url: Optional[str] = None, page_retries: int =
                 structure = await plan_two_phase(client, base, req, file_tree, readme, surface)
             else:
                 xml = await stream_chat(client, base, req,
-                                        build_structure_prompt(req.owner, req.repo, file_tree, readme, req.language,
+                                        build_structure_prompt(req.owner, req.repo, file_tree, readme,
                                                                req.comprehensive, req.max_pages, surface))
                 structure = parse_structure(xml, req.comprehensive)
 
@@ -1494,7 +1456,7 @@ def make_real_runner(*, self_base_url: Optional[str] = None, page_retries: int =
             # architecture, deployment, structure, config, glossary) — discovery alone
             # doesn't reliably produce them.
             scaffold_pages, scaffold_sections = build_scaffold(
-                file_tree, req.language, selected_foundational(req.foundational))
+                file_tree, selected_foundational(req.foundational))
             structure = prepend_scaffold(structure, scaffold_pages, scaffold_sections)
 
             pages = structure["pages"]
@@ -1507,7 +1469,7 @@ def make_real_runner(*, self_base_url: Optional[str] = None, page_retries: int =
             tree_ctx = ("Project file tree (authoritative for directory structure and paths):\n"
                         f"<file_tree>\n{_trim_tree(file_tree)}\n</file_tree>")
             glossary_ctx = await asyncio.to_thread(
-                build_glossary_context, clone_dir, file_tree, structure, req.language)
+                build_glossary_context, clone_dir, file_tree, structure)
 
             def _extra_ctx(page):
                 if page["id"] == SCAFFOLD_STRUCTURE_ID:
