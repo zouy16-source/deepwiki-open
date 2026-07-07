@@ -11,6 +11,8 @@
 统一约定：
 
 - 前端只面向 `web/` 的 Nitro BFF 单入口；BFF 将会话换成内部 JWT（HS256，`INTERNAL_JWT_SECRET`）下发给各服务
+- 登录链路：BFF `/api/auth/login` → identity `/internal/auth/verify`（LDAP search-then-bind，**唯一认证源，无本地回退**）→ BFF 写 httpOnly 会话 cookie；`INTERNAL_JWT_SECRET` 为空 = 本地开发免鉴权
+- 平台 API 代理：BFF `/api/{requirements,users,projects,audit-logs}/**` 同路径转发至对应服务（`web/server/utils/platformProxy.ts`），转发时校验会话并以会话用户为 sub 即签短时内部 JWT；会话 cookie 不透传给内部服务
 - 每服务独立 MySQL schema 与 alembic 迁移，**禁止跨库 join**，跨域数据经 API 聚合
 - requirement 调用 api 服务发起分析任务，结果经事件/回调回写，避免双向强耦合
 - 新服务复制 requirement 的目录结构与约定（config/db/auth/models/schemas/routers + alembic）

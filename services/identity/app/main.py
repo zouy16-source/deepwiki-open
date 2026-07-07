@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from .config import settings
 from .db import Base, engine
-from .routers import audit, projects, users
+from .routers import audit, auth, projects, users
 
 
 @asynccontextmanager
@@ -22,6 +22,7 @@ def health():
     return {"status": "ok", "service": settings.app_name}
 
 
+app.include_router(auth.router, prefix="/internal/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(audit.router, prefix="/api/audit-logs", tags=["audit"])

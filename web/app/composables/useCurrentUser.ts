@@ -1,6 +1,6 @@
-// Current signed-in user, shared app-wide. The data is a placeholder for now —
-// wire `fetchCurrentUser` to the real user API when it's available; the rest of
-// the UI only depends on the `CurrentUser` shape, so the swap stays local here.
+// Current signed-in user, shared app-wide. Reads from the auth session
+// (populated by the global auth middleware via /api/auth/me); the UI only
+// depends on the `CurrentUser` shape, so consumers stay unchanged.
 export interface CurrentUser {
   name: string
   email?: string
@@ -9,17 +9,17 @@ export interface CurrentUser {
 }
 
 export function useCurrentUser() {
-  // useState keeps the user reactive, SSR-safe, and shared across components.
-  const user = useState<CurrentUser>('current-user', () => ({
-    name: '当前用户',
-    email: 'user@example.com',
-    avatar: '',
-  }))
+  const { state, refresh } = useAuthSession()
 
-  // TODO: replace the placeholder above with the real endpoint, e.g.
-  //   user.value = await $fetch<CurrentUser>('/api/user/me')
+  const user = computed<CurrentUser>(() => {
+    const u = state.value?.user
+    if (u) return { name: u.displayName || u.username, email: u.email, avatar: '' }
+    // 本地免鉴权模式（enabled=false）或会话未就绪时的占位
+    return { name: '开发模式', email: '', avatar: '' }
+  })
+
   async function fetchCurrentUser() {
-    // No-op until the user API is wired up.
+    await refresh()
   }
 
   return { user, fetchCurrentUser }

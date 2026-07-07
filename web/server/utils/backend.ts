@@ -13,6 +13,16 @@ export function pythonBackendHost(): string {
   return process.env.PYTHON_BACKEND_HOST || 'http://localhost:8001'
 }
 
+// identity 服务（services/identity：登录认证 + RBAC + 审计），端口约定见 services/README.md。
+export function identityBaseUrl(): string {
+  return process.env.IDENTITY_BASE_URL || 'http://localhost:8003'
+}
+
+// requirement 服务（services/requirement：需求流转 + 评审），端口约定见 services/README.md。
+export function requirementBaseUrl(): string {
+  return process.env.REQUIREMENT_BASE_URL || 'http://localhost:8002'
+}
+
 export function gitlabUrl(): string {
   return (process.env.GITLAB_URL || 'https://gitlab.com').replace(/\/+$/, '')
 }

@@ -7,18 +7,18 @@ import type { DropdownMenuItem, NavigationMenuItem } from '@nuxt/ui'
 const { t } = useI18n()
 const route = useRoute()
 
-// Sidebar footer user. Placeholder data for now — see useCurrentUser.
+// Sidebar footer user, backed by the login session (/api/auth/me).
 const { user } = useCurrentUser()
+const { logout } = useAuthSession()
 
-// Actions for the footer user dropdown. Handlers are stubs until the user/auth
-// API exists — fill in `onSelect` (or swap to `to:` routes) when it's wired up.
+// Actions for the footer user dropdown. 个人资料/设置 are stubs until those pages exist.
 const userMenuItems = computed<DropdownMenuItem[][]>(() => [
   [{ label: user.value.name, avatar: { src: user.value.avatar || undefined, alt: user.value.name }, type: 'label' }],
   [
     { label: '个人资料', icon: 'i-lucide-user' },
     { label: '设置', icon: 'i-lucide-settings' },
   ],
-  [{ label: '退出登录', icon: 'i-lucide-log-out', color: 'error' }],
+  [{ label: '退出登录', icon: 'i-lucide-log-out', color: 'error', onSelect: () => { logout() } }],
 ])
 
 // A wiki detail route (/{owner}/{repo}) renders inside this layout too.

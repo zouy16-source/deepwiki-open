@@ -22,6 +22,22 @@ class UserOut(BaseModel):
     created_at: datetime
 
 
+class LoginVerifyRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1)
+
+
+class RoleGrant(BaseModel):
+    role: str
+    project_id: int | None  # None = 全局角色（如平台管理员）
+
+
+class LoginVerifyResponse(BaseModel):
+    user: UserOut
+    roles: list[RoleGrant]
+    project_ids: list[int]
+
+
 class ProjectCreate(BaseModel):
     code: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=128)
