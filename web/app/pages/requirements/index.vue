@@ -37,7 +37,7 @@ const { data: reqs, pending, error } = useFetch<Requirement[]>('/api/requirement
 
 <template>
   <div class="h-full overflow-y-auto">
-    <div class="max-w-6xl mx-auto p-4 sm:p-6 space-y-4">
+    <div class="max-w-full mx-auto p-4 sm:p-6 space-y-4">
       <div class="flex flex-wrap items-center gap-3">
         <USelect v-model="status" :items="statusItems" class="w-36" />
         <USelect v-model="projectId" :items="projectItems" class="w-48" />

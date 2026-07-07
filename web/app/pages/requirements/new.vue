@@ -94,7 +94,7 @@ async function submit() {
 
 <template>
   <div class="h-full overflow-y-auto">
-    <div class="max-w-2xl mx-auto p-4 sm:p-6 space-y-4">
+    <div class="max-w-2xl p-4 sm:p-6 space-y-4">
       <div class="flex items-center gap-2">
         <UButton variant="ghost" color="neutral" icon="i-lucide-arrow-left" size="sm" :to="parentId ? `/requirements/${parentId}` : '/requirements'" />
         <h1 class="text-lg font-bold text-highlighted">{{ parentId ? '新建子需求（系统需求）' : '新建需求' }}</h1>
