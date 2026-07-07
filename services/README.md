@@ -1,0 +1,18 @@
+# services/ — AI研发管理平台后端服务
+
+后端按模块拆分服务（见 [docs/admin-phase1-plan.md](../docs/admin-phase1-plan.md) §3.1 工程结构）：
+
+| 服务 | 模块 | 端口 | 存储 |
+| --- | --- | --- | --- |
+| [requirement](./requirement/) | 模块一（需求管理中心）+ 模块三（评审协作） | 8002 | MySQL `requirement_db` |
+| [identity](./identity/) | 模块十一（SSO/RBAC/项目空间/审计） | 8003 | MySQL `identity_db` |
+| `../api/`（存量演进） | 模块二（AI 可行性分析）+ 模块八（代码知识库） | 8001 | LocalDB + FAISS 本地索引 |
+
+统一约定：
+
+- 前端只面向 `web/` 的 Nitro BFF 单入口；BFF 将会话换成内部 JWT（HS256，`INTERNAL_JWT_SECRET`）下发给各服务
+- 每服务独立 MySQL schema 与 alembic 迁移，**禁止跨库 join**，跨域数据经 API 聚合
+- requirement 调用 api 服务发起分析任务，结果经事件/回调回写，避免双向强耦合
+- 新服务复制 requirement 的目录结构与约定（config/db/auth/models/schemas/routers + alembic）
+
+本地一键起后端：仓库根目录 `docker-compose up mysql requirement identity`（api 服务见根 README）。
