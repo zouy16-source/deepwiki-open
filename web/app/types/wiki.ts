@@ -22,6 +22,7 @@ export interface WikiPage {
   importance: 'high' | 'medium' | 'low'
   relatedPages: string[]
   type?: PageType
+  tags?: string[]          // audience (产品/研发/测试) + business domain + free tags
   edited?: boolean         // manually edited (locked from full regeneration)
   updated_at?: number      // unix ms of last edit / single-page regenerate
   prev_content?: string    // previous content, for one-level revert

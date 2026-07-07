@@ -82,6 +82,10 @@ class GenerateRequest(BaseModel):
     # structure, configuration, glossary). "" = default set; "none"/"off" = disable;
     # else a comma list of ids/short-names. See wiki_generator.build_scaffold.
     foundational: str = ""
+    # Lean mode (DEFAULT): dev-onboarding scaffold + machine assets (glossary/API
+    # inventory for field-trace routing) only — no per-module product pages. The
+    # AI chat / field-trace is the product-facing surface, not detailed wiki pages.
+    lean: bool = True
 
 
 @dataclass(frozen=True)

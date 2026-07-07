@@ -327,9 +327,11 @@ export function useWikiData(opts: WikiDataOptions) {
             effectiveRepoInfo.value = { ...effectiveRepoInfo.value, repoUrl: cached.repo_url }
           }
           // Resolve the real default branch BEFORE rendering: citation links are
-          // built at render time by generateFileUrl(), so if we render first the
-          // links bake in the initial 'main' even when the repo uses 'master'.
-          await refreshDefaultBranch()
+          // built at render time by generateFileUrl(). The cache records the branch
+          // the wiki was generated from — authoritative and offline; only fall back
+          // to the GitLab lookup for old caches without it.
+          if (cached.default_branch) defaultBranch.value = cached.default_branch
+          else await refreshDefaultBranch()
           const structure: WikiStructure = {
             ...cached.wiki_structure,
             sections: cached.wiki_structure.sections || [],
@@ -474,8 +476,18 @@ export function useWikiData(opts: WikiDataOptions) {
   }
 
   // --- per-page edit / regenerate / revert (Wikipedia-style refinement) ---
-  const pageBusy = ref<string | null>(null) // page id currently being acted on
+  // Set of page ids with an in-flight action. A Set (not a single id) so a long
+  // regeneration keeps its "busy" mark while the user browses other pages — and the
+  // banner reappears when they come back.
+  const busyPages = ref<Set<string>>(new Set())
   const pageActionError = ref<string | null>(null)
+
+  function setPageBusy(id: string, on: boolean) {
+    const s = new Set(busyPages.value)
+    if (on) s.add(id)
+    else s.delete(id)
+    busyPages.value = s
+  }
 
   function applyPageUpdate(page: WikiPage) {
     generatedPages.value = { ...generatedPages.value, [page.id]: page }
@@ -494,7 +506,7 @@ export function useWikiData(opts: WikiDataOptions) {
   }
 
   async function savePageEdit(pageId: string, content: string, title?: string) {
-    pageBusy.value = pageId
+    setPageBusy(pageId, true)
     pageActionError.value = null
     try {
       const res = await $fetch<{ page: WikiPage }>('/api/wiki/page', {
@@ -507,7 +519,7 @@ export function useWikiData(opts: WikiDataOptions) {
       pageActionError.value = err instanceof Error ? err.message : '保存失败'
       return false
     } finally {
-      pageBusy.value = null
+      setPageBusy(pageId, false)
     }
   }
 
@@ -525,7 +537,8 @@ export function useWikiData(opts: WikiDataOptions) {
   }
 
   async function regeneratePage(pageId: string, instruction = '') {
-    pageBusy.value = pageId
+    if (busyPages.value.has(pageId)) return false // already regenerating this page
+    setPageBusy(pageId, true)
     pageActionError.value = null
     const prevUpdatedAt = generatedPages.value[pageId]?.updated_at || 0
     try {
@@ -568,12 +581,12 @@ export function useWikiData(opts: WikiDataOptions) {
       pageActionError.value = '生成时间过长：任务可能仍在后台运行，请稍后刷新页面查看'
       return false
     } finally {
-      pageBusy.value = null
+      setPageBusy(pageId, false)
     }
   }
 
   async function revertPage(pageId: string, at?: number) {
-    pageBusy.value = pageId
+    setPageBusy(pageId, true)
     pageActionError.value = null
     try {
       const res = await $fetch<{ page: WikiPage }>('/api/wiki/page/revert', {
@@ -586,7 +599,7 @@ export function useWikiData(opts: WikiDataOptions) {
       pageActionError.value = err instanceof Error ? err.message : '回滚失败'
       return false
     } finally {
-      pageBusy.value = null
+      setPageBusy(pageId, false)
     }
   }
 
@@ -604,7 +617,7 @@ export function useWikiData(opts: WikiDataOptions) {
     isLoading, loadingMessage, error, embeddingError,
     wikiStructure, currentPageId, generatedPages, pagesInProgress,
     effectiveRepoInfo, defaultBranch, isExporting, exportError, provider, model,
-    pageBusy, pageActionError,
+    busyPages, pageActionError,
     // actions
     generateFileUrl, loadData, exportWiki, selectPage,
     savePageEdit, regeneratePage, revertPage, fetchPageHistory,

@@ -110,5 +110,12 @@ export default defineNuxtConfig({
     // Per-page edit / regenerate / revert (Wikipedia-style page refinement).
     '/api/wiki/page': { proxy: `${SERVER_BASE_URL}/api/wiki/page` },
     '/api/wiki/page/**': { proxy: `${SERVER_BASE_URL}/api/wiki/page/**` },
+    // P0 field trace (业务字段全域追溯).
+    '/api/field_trace': { proxy: `${SERVER_BASE_URL}/api/field_trace` },
+    // AI project pre-scan profiles.
+    '/api/project/profile': { proxy: `${SERVER_BASE_URL}/api/project/profile` },
+    '/api/project/profiles': { proxy: `${SERVER_BASE_URL}/api/project/profiles` },
+    // System-level identity (system / layer / tags) editing.
+    '/api/wiki/system_meta': { proxy: `${SERVER_BASE_URL}/api/wiki/system_meta` },
   },
 })

@@ -22,10 +22,9 @@ function citationHref(text: string, resolve: (p: string) => string): string | nu
   if (m) {
     const base = resolve(m[1])
     if (!base || base === m[1]) return null
-    const anchor = base.includes('/-/blob/')
-      ? `#L${m[2]}${m[3] ? `-${m[3]}` : ''}`
-      : `#L${m[2]}${m[3] ? `-L${m[3]}` : ''}`
-    return base + anchor
+    // 行号是生成时模型估算的（RAG 切块不带真实行号），带上锚点会跳到错误位置、
+    // 误导核验 —— 诚实降级：只链接到文件。trace 报告侧已用真实行号窗口修复。
+    return base
   }
   if (isBareFilePath(t)) {
     const base = resolve(t)

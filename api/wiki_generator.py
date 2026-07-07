@@ -100,6 +100,43 @@ def normalize_page_type(value: str) -> str:
     return t if t in PAGE_TYPES else "feature"
 
 
+# --- page tags ---------------------------------------------------------------
+# Three layers: audience (derived from type), business domain (the owning module),
+# and free tags the planner may add via <tags>. Used by the frontend tag filter so
+# a PM can view only 产品-relevant pages of one domain.
+_TYPE_AUDIENCE = {
+    "feature": ["产品", "研发", "测试"],
+    "overview": ["产品", "研发", "测试"],
+    "glossary": ["产品", "研发", "测试"],
+    "reference": ["研发", "测试"],
+    "cross-cutting": ["研发", "测试"],
+    "architecture": ["研发"],
+    "guide": ["研发"],
+}
+
+
+def finalize_tags(page: dict, domain: str = "") -> None:
+    """Merge audience-by-type + domain + planner-provided tags, deduped, capped."""
+    tags = list(_TYPE_AUDIENCE.get(normalize_page_type(page.get("type", "feature")), []))
+    if domain:
+        tags.append(domain.strip())
+    for t in page.get("tags") or []:
+        t = (t or "").strip()
+        if t:
+            tags.append(t)
+    seen, out = set(), []
+    for t in tags:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    page["tags"] = out[:8]
+
+
+def _parse_tags_el(page_el) -> list:
+    txt = _text(page_el.find("tags"))
+    return [t.strip() for t in re.split(r"[,，、;；]", txt) if t.strip()] if txt else []
+
+
 # Per-type body instructions (the middle of the page). All headings are FIXED
 # Chinese — the model must copy them verbatim, never translate or anglicize.
 _PAGE_BODY = {
@@ -130,7 +167,7 @@ Document only what is specific here; do NOT re-explain cross-cutting mechanisms.
     "overview": """This is an OVERVIEW / entry page for ALL audiences (product, engineering, QA):
 - What the project/module does, its core value, and who its users are (2-3 short paragraphs).
 - A feature map: use a Mermaid `graph TD` to show the main modules and how they relate.
-- "Where to go next": link to the detailed module/reference pages with `[Link Text](#page-anchor-or-id)`.
+- A 「后续阅读」 section (use this EXACT Chinese heading): link the most important module/reference pages. Every link MUST use a REAL page title from the page list in ADDITIONAL CONTEXT, in the exact form `[页面标题](#页面标题)` — never invent page names, never use English slugs.
 Keep it high-level and leave the details to the linked pages.""",
 
     "architecture": """This is an ARCHITECTURE page:
@@ -148,11 +185,12 @@ Keep it high-level and leave the details to the linked pages.""",
 - Numbered, step-by-step instructions with concrete commands / config examples.
 - Common problems and troubleshooting.""",
 
-    "glossary": """This is the project GLOSSARY / business-terminology page. Be COMPREHENSIVE — readers expect FULL coverage, not a handful of terms; do NOT summarize or stop early.
-- Enumerate EVERY distinct domain / business term, entity, status, role and acronym used across the project. Draw them from the documented module list AND the UI / i18n labels given in the ADDITIONAL CONTEXT below, plus entities, fields, enums and statuses in the source files.
-- GROUP terms by domain (e.g. 账户、面单、单号与回收、销售、系统与权限 …) with a Chinese H2 or H3 per group; within each group use a Markdown table with columns: 术语 | 英文/缩写 | 定义 | 所属模块.
-- Link the "where it is used" cell to the relevant wiki page with `[Link Text](#page-anchor-or-id)` when possible.
-- Include acronyms and bilingual mappings (e.g. SSO, VIP, GIS; 面单 / waybill). Aim for breadth — a real business system has dozens of terms; if the context lists many labels, cover them.""",
+    "glossary": """This is the project GLOSSARY — a BUSINESS FIELD dictionary (业务术语与字段词典). Be COMPREHENSIVE — readers expect FULL coverage, not a handful of terms; do NOT summarize or stop early.
+- Enumerate EVERY business term, document/entity, fee item, status and enum used across the project, TOGETHER WITH its code identifier: the API/form field name (e.g. 运单号 → waybillNo) or the enum/constant code (e.g. 订单转运单 → ORDER). The ADDITIONAL CONTEXT below lists them as “术语 (字段名/编码)” — cover ALL of them, plus entities/fields/enums you find in the source files.
+- ONLY business vocabulary. Do NOT include generic page/UI wording — placeholders (请输入/请选择), buttons (确定/取消/保存/查询), date shortcuts (昨天/最近一周), navigation (首页/登录) — those are page attributes, not business terms.
+- GROUP terms by domain (e.g. 运单、费用、网点、货物、服务与派送 …) with a Chinese H2 or H3 per group; within each group use a Markdown table with columns: 术语 | 字段名/编码 | 定义 | 所属模块.
+- Fill the 字段名/编码 column from the context pairs (or from the source files); leave it as - only when no identifier exists. Link the 所属模块 cell to the relevant wiki page with `[Link Text](#page-anchor-or-id)` when possible.
+- Include acronyms and bilingual mappings (e.g. SSO, VIP, GIS; 面单 / waybill). Aim for breadth — a real business system has dozens of terms; cover the whole context list.""",
 }
 
 # Appended to every page EXCEPT the cross-cutting page itself, to stop each module
@@ -248,6 +286,7 @@ _XML_COMPREHENSIVE = """<wiki_structure>
       <description>[Brief description of what this page will cover]</description>
       <importance>high|medium|low</importance>
       <type>overview|architecture|feature|reference|cross-cutting|guide</type>
+      <tags>[可选：业务域标签，逗号分隔，如 运单,费用]</tags>
       <relevant_files>
         <file_path>[Path to a relevant file]</file_path>
       </relevant_files>
@@ -268,6 +307,7 @@ _XML_CONCISE = """<wiki_structure>
       <description>[Brief description of what this page will cover]</description>
       <importance>high|medium|low</importance>
       <type>overview|architecture|feature|reference|cross-cutting|guide</type>
+      <tags>[可选：业务域标签，逗号分隔，如 运单,费用]</tags>
       <relevant_files>
         <file_path>[Path to a relevant file]</file_path>
       </relevant_files>
@@ -417,11 +457,14 @@ def parse_structure(response_text: str, comprehensive: bool) -> dict:
         importance = imp if imp in ("high", "low") else "medium"
         file_paths = [t for t in (_text(e) for e in page_el.iter("file_path")) if t]
         related = [t for t in (_text(e) for e in page_el.iter("related")) if t]
-        pages.append({
+        pg = {
             "id": pid, "title": p_title, "content": "",
             "filePaths": file_paths, "importance": importance, "relatedPages": related,
             "type": normalize_page_type(_text(page_el.find("type"))),
-        })
+            "tags": _parse_tags_el(page_el),
+        }
+        finalize_tags(pg)
+        pages.append(pg)
 
     sections = []
     root_sections = []
@@ -668,12 +711,55 @@ def build_glossary_append_prompt(content: str, missing: list) -> str:
 
 规则：
 - 保持原有内容、结构、`<details>` 块和 `Sources:` 引用完全不变 — 只做“追加”，不得删改已有条目。
-- 新增行沿用表格列：术语 | 英文/缩写 | 定义 | 所属模块。
+- 新增行沿用表格列：术语 | 字段名/编码 | 定义 | 所属模块（知道对应代码字段/枚举编码就填入，否则填 -）。
+- 只补业务术语；如某词条属于页面通用词（请输入/按钮文案等）可跳过。
 - 全部使用中文。直接输出完整 Markdown 页面，不要额外说明，也不要用代码块包裹整页。
 
 <page_to_fix>
 {content}
 </page_to_fix>"""
+
+
+def build_api_append_prompt(content: str, missing: list) -> str:
+    miss = "\n".join(f"- {s}" for s in missing)
+    return f"""下面这份接口清单文档遗漏了一批接口。请把缺失接口补充进对应的分组表格中（没有合适分组就新建一个中文分组），然后返回补充后的完整页面。
+
+缺失接口（每一条都必须补入某个表格）：
+{miss}
+
+规则：
+- 保持原有内容、结构、`<details>` 块和 `Sources:` 引用完全不变 — 只做“追加”，不得删改已有条目。
+- 新增行沿用表格列：接口路径 | 方法 | 用途 | 关键请求/响应字段 | 源文件（不确定的列填 -）。
+- 全部使用中文。直接输出完整 Markdown 页面，不要额外说明，也不要用代码块包裹整页。
+
+<page_to_fix>
+{content}
+</page_to_fix>"""
+
+
+async def _maybe_repair_api(client, base, req, page, content: str, extra_context: str) -> str:
+    """Coverage enforcement for the API-inventory page (same pattern as the glossary):
+    measure how many harvested endpoint paths appear; one append-only repair if low."""
+    paths = _paths_from_extra_context(extra_context)
+    if not paths:
+        return content
+    cov, missing = _glossary_coverage(content, paths)
+    if cov >= _GLOSSARY_COVERAGE_MIN or len(missing) < 8:
+        return content
+    logger.info("api-inventory coverage %.0f%% (%d/%d missing) — issuing append repair",
+                cov * 100, len(missing), len(paths))
+    try:
+        fixed = _strip_md_fence(await stream_chat(
+            client, base, req, build_api_append_prompt(content, missing[:250])))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("api-inventory repair failed: %s", e)
+        return content
+    new_cov, _ = _glossary_coverage(fixed, paths)
+    if fixed.strip() and new_cov > cov and len(fixed) >= len(content):
+        logger.info("api-inventory repair raised coverage %.0f%% -> %.0f%%", cov * 100, new_cov * 100)
+        return fixed
+    logger.info("api-inventory repair did not improve coverage; keeping original")
+    return content
 
 
 async def _maybe_repair_glossary(client, base, req, page, content: str, extra_context: str) -> str:
@@ -713,6 +799,7 @@ async def _gen_page(client, base, req, page, default_branch, retries: int, extra
             if content.strip():
                 content = await _maybe_repair_flow(client, base, req, page, content)
                 content = await _maybe_repair_glossary(client, base, req, page, content, extra_context)
+                content = await _maybe_repair_api(client, base, req, page, content, extra_context)
                 return content, True
             last_err = "empty response"
         except Exception as e:  # noqa: BLE001
@@ -724,7 +811,8 @@ async def _gen_page(client, base, req, page, default_branch, retries: int, extra
 # --- save (saving phase) via loopback HTTP -----------------------------------
 
 async def save_cache(client, base, req: GenerateRequest, structure: dict, generated: dict,
-                     commit_id: str = "", default_branch: str = "", generated_at: Optional[int] = None) -> None:
+                     commit_id: str = "", default_branch: str = "", generated_at: Optional[int] = None,
+                     system_meta: Optional[dict] = None) -> None:
     body = {
         "repo": {
             "owner": req.owner, "repo": req.repo, "type": req.repo_type,
@@ -742,6 +830,9 @@ async def save_cache(client, base, req: GenerateRequest, structure: dict, genera
         "commit_id": commit_id or None,
         "default_branch": default_branch or None,
         "generated_at": generated_at,
+        "system": (system_meta or {}).get("system"),
+        "layer": (system_meta or {}).get("layer"),
+        "system_tags": (system_meta or {}).get("system_tags"),
     }
     r = await client.post(f"{base}/api/wiki_cache", json=body, timeout=120.0)
     r.raise_for_status()
@@ -879,6 +970,7 @@ def parse_module_pages(response_text: str, module_id: str) -> list:
             "importance": imp if imp in ("high", "low") else "medium",
             "relatedPages": [t for t in (_text(e) for e in page_el.iter("related")) if t],
             "type": normalize_page_type(_text(page_el.find("type"))),
+            "tags": _parse_tags_el(page_el),
         })
     return pages
 
@@ -892,6 +984,7 @@ def _assemble_two_phase(meta: dict, module_results: list, max_pages: int) -> dic
                 break
             if not pg.get("title"):
                 continue
+            finalize_tags(pg, domain=mod.get("title", ""))
             pages.append(pg)
             page_ids.append(pg["id"])
         if page_ids:
@@ -942,11 +1035,13 @@ async def plan_two_phase(client, base, req: GenerateRequest, file_tree: str, rea
             except Exception as e:  # noqa: BLE001
                 logger.warning("expand module '%s' failed: %s", mod.get("title"), e)
             # fallback: the module becomes a single page
-            return mod, [{
+            fb = {
                 "id": f"{mod['id']}-p1", "title": mod["title"], "content": "",
                 "filePaths": mod["files"][:8], "importance": "medium", "relatedPages": [],
                 "type": "feature",
-            }]
+            }
+            finalize_tags(fb, domain=mod.get("title", ""))
+            return mod, [fb]
 
     results = await asyncio.gather(*(expand(m) for m in modules))
     return _assemble_two_phase(meta, results, req.max_pages)
@@ -1119,6 +1214,70 @@ async def _discover_new(client, base: str, req: GenerateRequest, added: set, str
     return shells, sections
 
 
+def build_changelog_prompt(changed: list, added: list, deleted: list, affected_titles: list,
+                           new_titles: list) -> str:
+    def fmt(xs):
+        return "\n".join(f"- {x}" for x in xs[:60]) or "(无)"
+    return f"""为一次系统更新写一段面向产品经理/业务同事的变更说明（release note）。只输出变更条目本身（Markdown 无序列表，3-10 条），不要标题、不要前言。
+
+本次代码变更：
+变更文件：
+{fmt(changed)}
+新增文件：
+{fmt(added)}
+删除文件：
+{fmt(deleted)}
+
+受影响并已更新文档的功能模块：
+{fmt(affected_titles)}
+
+新增的功能模块：
+{fmt(new_titles)}
+
+要求：用业务语言（“优化了XX录入体验”“新增XX功能”），不出现文件名/代码术语；每条结尾用 [模块页](#锚点) 链接对应 wiki 页；全部中文。"""
+
+
+async def _append_changelog(client, base: str, req: GenerateRequest, structure: dict, generated: dict,
+                            cmp: dict, affected: list, new_shells: list, old_sha: str, new_sha: str) -> None:
+    """Create/prepend a business-language release-note entry on the 变更日志 page."""
+    try:
+        entry = _strip_md_fence(await stream_chat(client, base, req, build_changelog_prompt(
+            list(cmp.get("changed") or []), list(cmp.get("added") or []), list(cmp.get("deleted") or []),
+            [p.get("title", "") for p in affected], [p.get("title", "") for p in new_shells])))
+    except Exception as e:  # noqa: BLE001 — changelog is best-effort
+        logger.warning("changelog generation failed: %s", e)
+        return
+    if not entry.strip():
+        return
+    stamp = time.strftime("%Y-%m-%d %H:%M")
+    section = f"## {stamp}（{(old_sha or '')[:8]} → {(new_sha or '')[:8]}）\n\n{entry.strip()}\n"
+    page = generated.get(CHANGELOG_ID)
+    if page:
+        body = page.get("content") or ""
+        m = re.search(r"(?m)^## ", body)
+        page["content"] = (body[:m.start()] + section + "\n" + body[m.start():]) if m \
+            else (body.rstrip() + "\n\n" + section)
+        page["updated_at"] = int(time.time() * 1000)
+    else:
+        page = {"id": CHANGELOG_ID, "title": "系统变更日志",
+                "content": f"# 系统变更日志\n\n本页记录每次增量更新对业务功能的影响（自动生成）。\n\n{section}",
+                "filePaths": [], "importance": "medium", "relatedPages": [],
+                "type": "reference", "tags": ["产品", "研发", "测试", "基础"],
+                "edited": False, "updated_at": int(time.time() * 1000)}
+        generated[CHANGELOG_ID] = page
+        structure["pages"] = (structure.get("pages") or []) + [{**page, "content": ""}]
+        secs = structure.get("sections") or []
+        intro = next((x for x in secs if x.get("id") == "found-intro"), None)
+        if intro is not None:
+            intro["pages"] = list(intro.get("pages") or []) + [CHANGELOG_ID]
+        else:
+            secs.append({"id": "found-changelog-sec", "title": "变更记录",
+                         "pages": [CHANGELOG_ID], "subsections": None})
+            structure["rootSections"] = (structure.get("rootSections") or []) + ["found-changelog-sec"]
+        structure["sections"] = secs
+    logger.info("changelog entry appended (%d changed files)", len(cmp.get("changed") or []))
+
+
 def _prune_deleted(structure: dict, generated: dict, deleted: set) -> int:
     """Drop pages whose relevant files were ALL deleted (module removed). Returns count."""
     if not deleted:
@@ -1172,7 +1331,9 @@ async def _run_incremental(job: Job, ctx: JobContext, req: GenerateRequest, clie
         ctx.set_total_pages(0)
         await ctx.set_phase("saving")
         await save_cache(client, base, req, structure, generated,
-                         commit_id=new_sha, default_branch=branch, generated_at=int(time.time() * 1000))
+                         commit_id=new_sha, default_branch=branch, generated_at=int(time.time() * 1000),
+                         system_meta={"system": cached.get("system"), "layer": cached.get("layer"),
+                                      "system_tags": cached.get("system_tags")})
         return
 
     # re-index to the new code (fresh clone + re-embed)
@@ -1208,6 +1369,7 @@ async def _run_incremental(job: Job, ctx: JobContext, req: GenerateRequest, clie
                     "id": pg["id"], "title": pg.get("title", ""), "content": content,
                     "filePaths": pg.get("filePaths") or [], "importance": pg.get("importance", "medium"),
                     "relatedPages": pg.get("relatedPages") or [], "type": pg.get("type", "feature"),
+                    "tags": pg.get("tags") or [],
                 }
                 ctx.page_done(failed=not ok)
 
@@ -1223,9 +1385,16 @@ async def _run_incremental(job: Job, ctx: JobContext, req: GenerateRequest, clie
     # prune pages whose module's files were entirely deleted
     _prune_deleted(structure, generated, set(cmp.get("deleted") or []))
 
+    # business-language release note for this update
+    if to_gen or cmp.get("deleted"):
+        await _append_changelog(client, base, req, structure, generated, cmp,
+                                affected, new_shells, old_sha, new_sha)
+
     await ctx.set_phase("saving")
     await save_cache(client, base, req, structure, generated,
-                     commit_id=new_sha, default_branch=branch, generated_at=int(time.time() * 1000))
+                     commit_id=new_sha, default_branch=branch, generated_at=int(time.time() * 1000),
+                     system_meta={"system": cached.get("system"), "layer": cached.get("layer"),
+                                  "system_tags": cached.get("system_tags")})
 
 
 # --- foundational scaffold (guaranteed onboarding / architecture / ops pages) ---
@@ -1236,6 +1405,12 @@ async def _run_incremental(job: Job, ctx: JobContext, req: GenerateRequest, clie
 
 SCAFFOLD_STRUCTURE_ID = "found-structure"  # this page gets the file tree injected
 SCAFFOLD_GLOSSARY_ID = "found-glossary"    # this page gets i18n labels + module map injected
+SCAFFOLD_API_ID = "found-api-inventory"    # this page gets the harvested endpoint list injected
+SCAFFOLD_FEATURE_MAP_ID = "found-feature-map"
+SCAFFOLD_JOURNEYS_ID = "found-journeys"
+SCAFFOLD_RULES_ID = "found-biz-rules"
+SCAFFOLD_STATES_ID = "found-state-machines"
+CHANGELOG_ID = "found-changelog"  # created/appended by incremental updates only
 
 # Ordered spec. `patterns` (regex, case-insensitive) are matched against file-tree
 # lines in priority order to pick each page's relevant_files. `section` groups pages.
@@ -1247,6 +1422,12 @@ _FOUNDATIONAL = [
      "title": "快速上手",
      "patterns": [r"本地开发", r"本地開發", r"CONTRIBUTING", r"(^|/)run\.sh$", r"(^|/)Makefile$", r"(^|/)package\.json$",
                   r"\.env", r"docker-compose", r"(^|/)README"]},
+    {"id": SCAFFOLD_FEATURE_MAP_ID, "type": "reference", "section": "intro",
+     "title": "功能地图",
+     "patterns": [r"(router|routes|menu|nav)", r"(^|/)pages(/|$)", r"(^|/)views(/|$)", r"nuxt\.config\.", r"(^|/)README"]},
+    {"id": SCAFFOLD_JOURNEYS_ID, "type": "overview", "section": "intro",
+     "title": "端到端业务旅程",
+     "patterns": [r"(router|routes|menu)", r"(^|/)pages(/|$)", r"(^|/)README"]},
     {"id": SCAFFOLD_STRUCTURE_ID, "type": "reference", "section": "intro",
      "title": "项目结构与目录地图",
      "patterns": [r"(^|/)package\.json$", r"nuxt\.config\.", r"(^|/)api/main\.py$", r"(^|/)api/api\.py$",
@@ -1255,6 +1436,12 @@ _FOUNDATIONAL = [
      "title": "术语表与业务名词",
      "patterns": [r"(^|/)i18n", r"(^|/)locales?(/|$)", r"(dict|dictionary|字典)", r"(enum|const(ant)?s?|types?)\.",
                   r"(router|routes|menu)", r"(^|/)README"]},
+    {"id": SCAFFOLD_RULES_ID, "type": "reference", "section": "intro",
+     "title": "业务规则清单",
+     "patterns": [r"(rule|valid|check)", r"(^|/)util/const", r"(dict|const)", r"(^|/)README"]},
+    {"id": SCAFFOLD_STATES_ID, "type": "reference", "section": "intro",
+     "title": "单据状态与流转",
+     "patterns": [r"(status|state)", r"(dict|const|enum)", r"(^|/)store(/|$)", r"(^|/)README"]},
     {"id": "found-architecture", "type": "architecture", "section": "ops",
      "title": "系统架构",
      "patterns": [r"nuxt\.config\.", r"(^|/)api/main\.py$", r"(^|/)api/api\.py$", r"(^|/)main\.(py|ts|js|go)$",
@@ -1263,6 +1450,9 @@ _FOUNDATIONAL = [
      "title": "配置与环境变量",
      "patterns": [r"\.env", r"(^|/)api/config\.py$", r"nuxt\.config\.", r"litellm-config", r"(^|/)config(/|\.|$)",
                   r"\.ya?ml$", r"(^|/)settings\."]},
+    {"id": SCAFFOLD_API_ID, "type": "reference", "section": "ops",
+     "title": "接口清单",
+     "patterns": [r"(^|/)api(/|\.|$)", r"service", r"(request|http|axios)", r"(^|/)README"]},
     {"id": "found-deployment", "type": "guide", "section": "ops",
      "title": "部署与运维",
      "patterns": [r"(^|/)Dockerfile", r"docker-compose", r"(^|/)run\.sh$", r"\.github/workflows", r"(gitlab-ci|Jenkinsfile)",
@@ -1282,7 +1472,9 @@ _DEFAULT_FOUNDATIONAL = [s["id"] for s in _FOUNDATIONAL]
 SKIP_FOUNDATIONAL_NOTE = (
     "Do NOT create foundational/onboarding pages — project overview, getting started / setup, "
     "system architecture, deployment / operations, project structure, configuration / environment, "
-    "or glossary. Those are generated separately. List ONLY the actual functional / business modules."
+    "glossary, a GLOBAL API inventory (接口清单), feature map (功能地图), business-rules list, "
+    "document state machines, or end-to-end business journeys. Those are generated separately. "
+    "List ONLY the actual functional / business modules (per-module API reference pages are fine)."
 )
 
 _FOUNDATIONAL_ALIASES = {
@@ -1293,6 +1485,12 @@ _FOUNDATIONAL_ALIASES = {
     "项目结构", "目录结构", "目录地图", "專案結構", "projectstructure", "codebasemap", "directorystructure",
     "配置", "配置与环境变量", "环境变量", "設定與環境變數", "configuration", "configurationenvironment", "environment",
     "术语表", "术语", "術語表", "glossary", "terminology",
+    "接口清单", "接口列表", "接口总览", "api清单", "api列表", "apiinventory", "apilist",
+    "功能地图", "功能清单", "功能列表", "菜单地图", "featuremap", "sitemap",
+    "业务规则清单", "业务规则", "规则清单", "businessrules",
+    "单据状态与流转", "状态机", "状态流转", "单据状态", "statemachine",
+    "端到端业务旅程", "业务旅程", "业务链路", "端到端流程", "userjourney", "businessjourney",
+    "变更日志", "系统变更日志", "changelog", "releasenotes",
 }
 
 
@@ -1339,11 +1537,13 @@ def build_scaffold(file_tree: str, include_ids: Optional[list] = None):
     for spec in _FOUNDATIONAL:
         if spec["id"] not in include:
             continue
-        pages.append({
+        sp = {
             "id": spec["id"], "title": spec["title"], "content": "",
             "filePaths": _detect_files(file_tree, spec["patterns"]),
             "importance": "high", "relatedPages": [], "type": spec["type"],
-        })
+        }
+        finalize_tags(sp, domain="基础")
+        pages.append(sp)
         section_pages.setdefault(spec["section"], []).append(spec["id"])
     sections = []
     for skey in ("intro", "ops"):
@@ -1435,24 +1635,52 @@ def _collect_i18n_labels(clone_dir: str, file_tree: str, limit: int = 500) -> li
     return out
 
 
-# Many internal repos have NO locale files at all — there the Chinese UI strings live
-# directly in source (label/title/placeholder props, el-table columns, const maps).
-# Harvest those as glossary terms, ranked by frequency.
-_CODE_LABEL_RE = re.compile(
-    r"""["'](?:label|title|placeholder|text|name|tab|column|tooltip)["']?\s*[:=]\s*["']([^"'\n]{2,24})["']"""
-    r"""|(?:label|title|placeholder|text|tab|tooltip)\s*[:=]\s*["']([^"'\n]{2,24})["']""",
-)
+# Readers want a BUSINESS FIELD dictionary (术语 ↔ 代码字段/枚举编码), not UI copy.
+# Harvest, in priority order:
+#   1. label↔prop pairs from table/form column definitions ({label:'网点名称',prop:'deptName'})
+#   2. enum value/label pairs ({value:'MONTHLY',label:'月结'})
+#   3. UPPER const maps (PT_NBJ:'内部件', ORDER:'订单转运单')
+#   4. unpaired labels / i18n strings — kept only if they pass the UI-noise filter.
 _HAN2_RE = re.compile(r"[一-鿿].*[一-鿿]")  # at least 2 Chinese chars
 _CODE_EXTS = (".vue", ".js", ".ts", ".jsx", ".tsx")
 _SKIP_DIRS = {"node_modules", "dist", ".git", ".nuxt", "vendor", "__pycache__", "static", "assets"}
 
+_PAIR_LABEL_PROP_RE = re.compile(  # label first or prop first, same line/object
+    r"""label\s*:\s*['"]([一-鿿][^'"]{0,23})['"][^\n]{0,80}?(?:prop|key|field|dataIndex)\s*:\s*['"]([A-Za-z_][\w.]{1,40})['"]"""
+    r"""|(?:prop|key|field|dataIndex)\s*:\s*['"]([A-Za-z_][\w.]{1,40})['"][^\n]{0,80}?label\s*:\s*['"]([一-鿿][^'"]{0,23})['"]""",
+)
+_PAIR_VALUE_LABEL_RE = re.compile(
+    r"""value\s*:\s*['"]([A-Za-z_][\w-]{0,40})['"]\s*,\s*label\s*:\s*['"]([一-鿿][^'"]{0,23})['"]"""
+    r"""|label\s*:\s*['"]([一-鿿][^'"]{0,23})['"]\s*,\s*value\s*:\s*['"]([A-Za-z_][\w-]{0,40})['"]""",
+)
+_CONST_MAP_RE = re.compile(r"""\b([A-Z][A-Z0-9_]{2,24})\s*:\s*['"]([一-鿿][^'"]{0,23})['"]""")
+_BARE_LABEL_RE = re.compile(r"""(?:label|title|text|tab)\s*[:=]\s*["']([^"'\n]{2,24})["']""")
 
-def _collect_code_labels(clone_dir: str, limit: int = 500) -> list:
-    """Extract Chinese UI strings (labels/titles/placeholders/const-map values) from
-    source files, most-frequent first. The term source for repos without i18n files."""
+# Page furniture, not business terms: placeholders, buttons, date shortcuts, nav.
+_UI_NOISE_RE = re.compile(
+    r"^请(输入|选择|填写|上传|扫描|勾选|足额)"
+    r"|^(确定|取消|关闭|返回|保存|提交|删除|编辑|新增|修改|查询|搜索|重置|导出|导入|上传|下载|刷新|操作|序号"
+    r"|首页|登录|退出|注册|上一步|下一步|昨天|今天|明天|本周|本月|全部|是|否|无|其它|其他|加载中|暂无数据"
+    r"|密码登录|短信登录|温馨提示|特别提醒|智能识别|智能解析|表格计算|修改名称|删除图片|上传图片|隐藏地址|显示地址)$"
+    r"|^最近"
+    r"|(提示|提醒)$"
+    r"|^正在"
+    r"|(成功|失败)$"
+    r"|\.{3}$|…$"
+)
+
+
+def _clean_term(s: str) -> str:
+    return re.sub(r"^\d+", "", (s or "").strip())  # "5增值服务" -> "增值服务"
+
+
+def _collect_business_terms(clone_dir: str, limit: int = 500) -> list:
+    """Extract (term, code) pairs from source files — paired business fields first
+    (they're what readers care about), then noise-filtered unpaired labels."""
     if not clone_dir or not os.path.isdir(clone_dir):
         return []
     from collections import Counter
+    pair_code: dict = {}      # term -> code (first seen wins)
     counts: Counter = Counter()
     scanned = 0
     for dirpath, dirnames, filenames in os.walk(clone_dir):
@@ -1468,44 +1696,66 @@ def _collect_code_labels(clone_dir: str, limit: int = 500) -> list:
                     src = f.read(400_000)
             except Exception:  # noqa: BLE001
                 continue
-            for m in _CODE_LABEL_RE.finditer(src):
-                s = (m.group(1) or m.group(2) or "").strip()
-                if s and _HAN2_RE.search(s):
-                    counts[s] += 1
-    return [s for s, _ in counts.most_common(limit)]
+            for m in _PAIR_LABEL_PROP_RE.finditer(src):
+                term, code = (m.group(1), m.group(2)) if m.group(1) else (m.group(4), m.group(3))
+                term = _clean_term(term)
+                if _HAN2_RE.search(term):
+                    pair_code.setdefault(term, code)
+                    counts[term] += 2  # pairs outrank bare labels
+            for m in _PAIR_VALUE_LABEL_RE.finditer(src):
+                code, term = (m.group(1), m.group(2)) if m.group(1) else (m.group(4), m.group(3))
+                term = _clean_term(term)
+                if _HAN2_RE.search(term):
+                    pair_code.setdefault(term, code)
+                    counts[term] += 2
+            for m in _CONST_MAP_RE.finditer(src):
+                term = _clean_term(m.group(2))
+                if _HAN2_RE.search(term):
+                    pair_code.setdefault(term, m.group(1))
+                    counts[term] += 2
+            for m in _BARE_LABEL_RE.finditer(src):
+                term = _clean_term(m.group(1))
+                if _HAN2_RE.search(term) and not _UI_NOISE_RE.search(term):
+                    counts[term] += 1
+    # paired terms first, then by frequency
+    ranked = sorted(counts, key=lambda t: (t not in pair_code, -counts[t]))
+    return [(t, pair_code.get(t, "")) for t in ranked[:limit]]
 
 
 # Fixed header for the term list inside the glossary extra-context. The coverage
-# repair below parses the "- term" lines back out of it, so keep them in sync.
-_GLOSSARY_LABELS_HEADER = "业务词条清单（来自界面代码与语言包，权威来源 — 术语表必须覆盖全部）："
+# repair below parses the "- term (code)" lines back out of it, so keep them in sync.
+_GLOSSARY_LABELS_HEADER = "业务术语与字段清单（术语 ↔ 代码字段/枚举编码，来自表格列定义、常量映射与语言包 — 术语表必须全部覆盖）："
 
 
 def build_glossary_context(clone_dir: str, file_tree: str, structure: dict,
                            max_labels: int = 800) -> str:
     """Authoritative term sources for the glossary page: the full module/page map plus
-    UI terms harvested from locale files AND source code (label/title/const strings) —
-    so repos without i18n files still get a rich term list."""
+    a BUSINESS term↔field list harvested from source code (column defs, const maps,
+    enums) and locale files. UI copy (placeholders, buttons, date shortcuts) is
+    filtered out — readers want the business/interface field dictionary."""
     parts = []
     titles = [p.get("title", "") for p in (structure.get("pages") or []) if p.get("title")]
     if titles:
         parts.append("Documented modules / pages (each is a domain area — extract its key terms):\n"
                      + "\n".join(f"- {t}" for t in titles[:200]))
-    labels = _collect_i18n_labels(clone_dir, file_tree, max_labels)
-    seen = set(labels)
-    for s in _collect_code_labels(clone_dir, max_labels):
-        if s not in seen:
+    terms = _collect_business_terms(clone_dir, max_labels)
+    seen = {t for t, _ in terms}
+    for s in _collect_i18n_labels(clone_dir, file_tree, max_labels):
+        s = _clean_term(s)
+        if s and s not in seen and _HAN2_RE.search(s) and not _UI_NOISE_RE.search(s):
             seen.add(s)
-            labels.append(s)
-            if len(labels) >= max_labels:
+            terms.append((s, ""))
+            if len(terms) >= max_labels:
                 break
-    if labels:
-        parts.append(f"{_GLOSSARY_LABELS_HEADER}\n" + "\n".join(f"- {s}" for s in labels)
-                     + "\n（可将同义/序号变体合并为一条，如“备注一/备注二”合并为“备注”；但每个实质术语都必须出现在某个分组表格中）")
+    if terms:
+        lines = "\n".join(f"- {t} ({c})" if c else f"- {t}" for t, c in terms)
+        parts.append(f"{_GLOSSARY_LABELS_HEADER}\n{lines}"
+                     + "\n（括号内为对应的代码字段名/枚举编码，务必填入“字段名/编码”列；同义/序号变体可合并为一条；每个实质术语都必须出现在某个分组表格中）")
     return "\n\n".join(parts)
 
 
 def _labels_from_extra_context(extra_context: str) -> list:
-    """Recover the term list from the glossary extra-context (lines under the fixed
+    """Recover the term list (Chinese side of '- 术语 (code)' lines under the fixed
     header) — used by the coverage repair pass."""
     if _GLOSSARY_LABELS_HEADER not in (extra_context or ""):
         return []
@@ -1514,21 +1764,144 @@ def _labels_from_extra_context(extra_context: str) -> list:
     for ln in block.splitlines():
         ln = ln.strip()
         if ln.startswith("- "):
-            out.append(ln[2:].strip())
+            term = re.sub(r"\s*\([^()]*\)\s*$", "", ln[2:]).strip()
+            if term:
+                out.append(term)
         elif out and ln and not ln.startswith("-"):
             break  # past the list
     return out
 
 
+# --- API inventory: harvest endpoints (method/path/function/comment) ----------
+# Dominant in-house pattern: request({ url: $Paths.record + '/sys/...', method: 'get' })
+# with the wrapper function name and a Chinese // comment right above — enough for a
+# 接口路径|方法|用途 table. Also catches plain url:'/x' and axios.get('/x') styles.
+
+_API_URL_RE = re.compile(r"""url:\s*(?:\$Paths\.(\w+)\s*\+\s*)?['"`](/[^'"`\s]{1,120})['"`]""")
+_API_METHOD_RE = re.compile(r"""method:\s*['"](\w+)['"]""", re.I)
+_API_FUNC_RE = re.compile(r"""^\s*(?:export\s+const\s+)?(\w{3,48})\s*[:=]""")
+_API_VERB_CALL_RE = re.compile(r"""\.(get|post|put|delete|patch)\(\s*['"`](/[^'"`\s]{2,120})['"`]""", re.I)
+
+
+def _collect_api_endpoints(clone_dir: str, limit: int = 400) -> list:
+    """Returns [(method, path, func_name, zh_comment, rel_file)] deduped by
+    (method, path). `path` keeps a `{prefix}` marker for $Paths-style bases."""
+    if not clone_dir or not os.path.isdir(clone_dir):
+        return []
+    out, seen = [], set()
+    scanned = 0
+    for dirpath, dirnames, filenames in os.walk(clone_dir):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        for fn in filenames:
+            if not fn.lower().endswith(_CODE_EXTS):
+                continue
+            scanned += 1
+            if scanned > 3000:
+                break
+            fp = os.path.join(dirpath, fn)
+            rel = os.path.relpath(fp, clone_dir).replace(os.sep, "/")
+            try:
+                with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = f.read(400_000).splitlines()
+            except Exception:  # noqa: BLE001
+                continue
+            last_comment, last_func = "", ""
+            for i, ln in enumerate(lines):
+                s = ln.strip()
+                if s.startswith("//"):
+                    c = s.lstrip("/ ").strip()
+                    if _HAN2_RE.search(c) and len(c) <= 40:
+                        last_comment = c
+                    continue
+                fm = _API_FUNC_RE.match(ln)
+                if fm and ("=>" in ln or "function" in ln or "request(" in ln or ": {" not in ln):
+                    last_func = fm.group(1)
+                um = _API_URL_RE.search(ln)
+                if um:
+                    prefix, path = um.group(1), um.group(2)
+                    shown = (f"{{{prefix}}}" if prefix else "") + path
+                    # method usually sits within the next couple of lines
+                    method = ""
+                    for j in range(i, min(i + 4, len(lines))):
+                        mm = _API_METHOD_RE.search(lines[j])
+                        if mm:
+                            method = mm.group(1).upper()
+                            break
+                    key = (method or "?", shown)
+                    if key not in seen:
+                        seen.add(key)
+                        out.append((method or "-", shown, last_func, last_comment, rel))
+                        if len(out) >= limit:
+                            return out
+                    last_comment = ""
+                for vm in _API_VERB_CALL_RE.finditer(ln):
+                    key = (vm.group(1).upper(), vm.group(2))
+                    if key not in seen:
+                        seen.add(key)
+                        out.append((vm.group(1).upper(), vm.group(2), last_func, last_comment, rel))
+                        if len(out) >= limit:
+                            return out
+    return out
+
+
+_API_LIST_HEADER = "接口清单（方法 路径 — 函数名 · 用途 · 源文件），文档必须覆盖全部接口："
+
+
+def build_api_context(clone_dir: str) -> str:
+    eps = _collect_api_endpoints(clone_dir)
+    if not eps:
+        return ""
+    eps = sorted(eps, key=lambda e: (e[1], e[0]))  # same-prefix endpoints adjacent → easier grouping
+    lines = "\n".join(
+        f"- {m} {p} — {fn or '-'} · {c or '-'} · {src}" for m, p, fn, c, src in eps)
+    return (f"{_API_LIST_HEADER}\n{lines}\n"
+            "（路径中 {xxx} 为网关/服务前缀变量。必须按服务前缀/业务域分组 — 每组一个中文 H2 标题"
+            "（如 运单服务 {waybill}、运单记录 {record}、GIS 服务 …），组内一张表格，"
+            "列：接口路径 | 方法 | 用途 | 关键请求/响应字段 | 源文件。不要把所有接口堆进一张大表。"
+            "字段含义不要在本页重复解释，链接到 [术语表与业务名词](#术语表与业务名词)。）")
+
+
+def _paths_from_extra_context(extra_context: str) -> list:
+    """Recover the endpoint path list ('- METHOD path — …' lines) for coverage. The
+    coverage key strips the {prefix} so it matches however the model prints the base."""
+    header = next((h for h in (_API_LIST_HEADER, _ROUTES_HEADER) if h in (extra_context or "")), None)
+    if not header:
+        return []
+    block = extra_context.split(header, 1)[1]
+    out = []
+    for ln in block.splitlines():
+        ln = ln.strip()
+        if ln.startswith("- "):
+            parts = ln[2:].split()
+            # API lines: "- METHOD path — …" (path 2nd); route lines: "- path — 名称" (path 1st)
+            for tok in parts[:2]:
+                path = re.sub(r"^\{[^}]*\}", "", tok)
+                if path.startswith("/"):
+                    out.append(path)
+                    break
+        elif out and ln and not ln.startswith("-"):
+            break
+    return out
+
+
 def rebuild_page_extra_context(repo_url: str, repo_type: str, page_id: str, page_type: str,
-                               structure: dict) -> str:
+                               structure: dict, generated_pages: Optional[dict] = None) -> str:
     """Reconstruct the extra grounding for a scaffold page OUTSIDE the runner (the
-    per-page regenerate endpoint) — the structure page needs the file tree, the
-    glossary page needs the term context. Returns '' for ordinary pages."""
+    per-page regenerate endpoint) — structure page: file tree; glossary page: term
+    list; API-inventory page: endpoint list. Returns '' for ordinary pages."""
     needs_tree = page_id == SCAFFOLD_STRUCTURE_ID
     needs_glossary = page_id == SCAFFOLD_GLOSSARY_ID or normalize_page_type(page_type) == "glossary"
-    if not (needs_tree or needs_glossary):
-        return ""
+    needs_api = page_id == SCAFFOLD_API_ID
+    if page_id == SCAFFOLD_JOURNEYS_ID:  # needs page contents, not the clone
+        return build_journeys_context(structure, generated_pages or {})
+    if page_id == "found-overview":  # needs the real page-title list for 「后续阅读」 links
+        return ("本 wiki 全部页面标题（「后续阅读」等跨页链接只能从中选取，格式 [标题](#标题)）：\n"
+                + "\n".join(f"- {p.get('title')}" for p in (structure.get("pages") or []) if p.get("title")))
+    special = {SCAFFOLD_FEATURE_MAP_ID, SCAFFOLD_RULES_ID, SCAFFOLD_STATES_ID}
+    titles_ctx = ("本 wiki 全部页面标题（跨页链接只能从中选取，格式 [标题](#标题)）：\n"
+                  + "\n".join(f"- {p.get('title')}" for p in (structure.get("pages") or []) if p.get("title")))
+    if not (needs_tree or needs_glossary or needs_api or page_id in special):
+        return titles_ctx
     # Locate the existing clone (same layout index_repo/refresh_index use).
     if repo_url and not repo_url.startswith(("http://", "https://")):
         clone_dir = repo_url  # local repo: the path itself
@@ -1543,11 +1916,226 @@ def rebuild_page_extra_context(repo_url: str, repo_type: str, page_id: str, page
             return ""
     if not os.path.isdir(clone_dir):
         return ""
+    if needs_api:
+        return build_api_context(clone_dir) + "\n\n" + titles_ctx
+    if page_id == SCAFFOLD_FEATURE_MAP_ID:
+        return build_feature_map_context(clone_dir, structure) + "\n\n" + titles_ctx
+    if page_id == SCAFFOLD_RULES_ID:
+        return build_rules_context(clone_dir, structure) + "\n\n" + titles_ctx
+    if page_id == SCAFFOLD_STATES_ID:
+        return build_states_context(clone_dir) + "\n\n" + titles_ctx
     file_tree, _ = derive_tree_from_clone(clone_dir)
     if needs_tree:
         return ("Project file tree (authoritative for directory structure and paths):\n"
                 f"<file_tree>\n{_trim_tree(file_tree)}\n</file_tree>")
     return build_glossary_context(clone_dir, file_tree, structure)
+
+
+# --- feature map / rules / states / journeys context builders -----------------
+
+_ROUTES_HEADER = "路由/菜单清单（路径 — 名称），功能地图必须覆盖全部路由："
+_MENU_TITLE_RE = re.compile(r"""(?:title|name|label)\s*:\s*['"]([一-鿿][^'"]{1,24})['"]""")
+_MENU_PATH_RE = re.compile(r"""path\s*:\s*['"](/[^'"]{0,80})['"]""")
+
+
+def _collect_routes(clone_dir: str, limit: int = 300) -> list:
+    """(path, 中文名) pairs from router/menu/nav files, plus page-file-derived routes."""
+    if not clone_dir or not os.path.isdir(clone_dir):
+        return []
+    out, seen = [], set()
+    for dirpath, dirnames, filenames in os.walk(clone_dir):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        for fn in filenames:
+            fp = os.path.join(dirpath, fn)
+            rel = os.path.relpath(fp, clone_dir).replace(os.sep, "/")
+            low = rel.lower()
+            if re.search(r"(router|routes|menu|nav)", low) and low.endswith(_CODE_EXTS):
+                try:
+                    lines = open(fp, "r", encoding="utf-8", errors="ignore").read(200_000).splitlines()
+                except Exception:  # noqa: BLE001
+                    continue
+                last_title = ""
+                for ln in lines:
+                    tm = _MENU_TITLE_RE.search(ln)
+                    if tm:
+                        last_title = tm.group(1)
+                    pm = _MENU_PATH_RE.search(ln)
+                    if pm and pm.group(1) not in seen:
+                        seen.add(pm.group(1))
+                        out.append((pm.group(1), last_title))
+                        last_title = ""
+            elif re.search(r"(^|/)(pages|views)/", rel) and low.endswith(".vue"):
+                route = "/" + re.sub(r"^.*?(pages|views)/", "", rel)[:-4].replace("/index", "")
+                if route not in seen:
+                    seen.add(route)
+                    out.append((route, ""))
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def build_feature_map_context(clone_dir: str, structure: dict) -> str:
+    routes = _collect_routes(clone_dir)
+    parts = []
+    if routes:
+        parts.append(_ROUTES_HEADER + "\n" + "\n".join(
+            f"- {p} — {t or '-'}" for p, t in routes))
+    titles = [p.get("title", "") for p in (structure.get("pages") or []) if p.get("title")]
+    if titles:
+        parts.append("已有 wiki 页面（“详情页”列链接到这些页）：\n" + "\n".join(f"- {t}" for t in titles[:150]))
+    parts.append("要求：这是给产品/业务看的功能全景。按业务域分组（中文 H2），每组一张表：\n"
+                 "菜单/功能 | 路由路径 | 功能说明（一句话、业务语言） | 详情页（链接对应 wiki 页）。\n"
+                 "覆盖上面清单中的每个路由；每个功能说明必须让非技术读者看懂。")
+    return "\n\n".join(parts)
+
+
+_RULE_MSG_RE = re.compile(r"""message\s*:\s*['"]([一-鿿][^'"]{3,40})['"]""")
+_RULE_SIGNAL_RE = re.compile(r"不能|必须|不可|超|至少|最多|上限|下限|限制|需|禁止|足额|为空|不合法|无效|失败")
+
+
+def _collect_rule_hints(clone_dir: str, limit: int = 200) -> list:
+    if not clone_dir or not os.path.isdir(clone_dir):
+        return []
+    from collections import Counter
+    counts: Counter = Counter()
+    for dirpath, dirnames, filenames in os.walk(clone_dir):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        for fn in filenames:
+            if not fn.lower().endswith(_CODE_EXTS):
+                continue
+            try:
+                src = open(os.path.join(dirpath, fn), "r", encoding="utf-8", errors="ignore").read(300_000)
+            except Exception:  # noqa: BLE001
+                continue
+            for m in _RULE_MSG_RE.finditer(src):
+                t = m.group(1).strip()
+                if _RULE_SIGNAL_RE.search(t) and not t.endswith("成功"):
+                    counts[t] += 1
+    return [t for t, _ in counts.most_common(limit)]
+
+
+def build_rules_context(clone_dir: str, structure: dict) -> str:
+    hints = _collect_rule_hints(clone_dir)
+    parts = []
+    if hints:
+        parts.append("校验/规则提示语（来自代码中的 message，提示了大量业务规则 — 逐条归纳成规则）：\n"
+                     + "\n".join(f"- {t}" for t in hints))
+    titles = [p.get("title", "") for p in (structure.get("pages") or [])
+              if p.get("type") == "feature" and p.get("title")]
+    if titles:
+        parts.append("业务模块（每个模块的计费/校验/阈值规则都要覆盖）：\n" + "\n".join(f"- {t}" for t in titles[:100]))
+    parts.append("要求：面向业务/测试的规则总表。按业务域分组（中文 H2），每组一张表：\n"
+                 "规则 | 触发条件 | 结果/限制 | 所属模块（链接 wiki 页）。\n"
+                 "覆盖：必填/格式校验、计费与费用规则、数量/金额上限、权限与流程限制。用业务语言，不贴代码。")
+    return "\n\n".join(parts)
+
+
+_STATE_WORD_RE = re.compile(r"已[一-鿿]|待[一-鿿]|状态|审核|作废|取消|驳回|冻结|完成|生效|失效|暂存|草稿")
+
+
+def _collect_state_hints(clone_dir: str, limit: int = 120) -> list:
+    if not clone_dir or not os.path.isdir(clone_dir):
+        return []
+    out, seen = [], set()
+    for dirpath, dirnames, filenames in os.walk(clone_dir):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        for fn in filenames:
+            low = fn.lower()
+            if not low.endswith(_CODE_EXTS) or not re.search(r"(const|dict|status|state|enum|store)", low):
+                continue
+            try:
+                src = open(os.path.join(dirpath, fn), "r", encoding="utf-8", errors="ignore").read(300_000)
+            except Exception:  # noqa: BLE001
+                continue
+            for m in re.finditer(r"""([A-Za-z_][\w]{1,30})\s*:\s*['"]([一-鿿][^'"]{1,20})['"]""", src):
+                if _STATE_WORD_RE.search(m.group(2)) and m.group(2) not in seen:
+                    seen.add(m.group(2))
+                    out.append(f"{m.group(2)} ({m.group(1)})")
+                    if len(out) >= limit:
+                        return out
+    return out
+
+
+def build_states_context(clone_dir: str) -> str:
+    hints = _collect_state_hints(clone_dir)
+    parts = []
+    if hints:
+        parts.append("代码中发现的状态类常量（识别它们属于哪种单据）：\n" + "\n".join(f"- {t}" for t in hints))
+    parts.append("要求：面向业务/产品的单据生命周期页。识别系统的每类核心单据（如运单、改单申请…），"
+                 "每类一个中文 H2：先一张状态表（状态 | 编码 | 含义 | 触发动作），再一个 Mermaid `graph TD` 状态流转图"
+                 "（节点=状态，边=触发动作/条件）。只画代码里有依据的流转。")
+    return "\n\n".join(parts)
+
+
+def build_journeys_context(structure: dict, generated: dict) -> str:
+    """Feed each feature page's 业务流程 section (truncated) so journeys chain REAL flows."""
+    parts = ["各模块业务流程摘要（端到端旅程必须由这些真实流程串联而成，并链接对应模块页）："]
+    for pg in (structure.get("pages") or []):
+        if pg.get("type") != "feature":
+            continue
+        g = generated.get(pg["id"]) or {}
+        content = g.get("content") or "" if isinstance(g, dict) else ""
+        sec = _first_h2_section(content) or ""
+        sec = re.sub(r"```[\s\S]*?```", "", sec).strip()[:500]
+        if sec:
+            parts.append(f"### {pg.get('title')}\n{sec}")
+    parts.append("要求：写 3-6 条最重要的端到端业务旅程（如“从录单到面单打印”）。每条旅程：中文 H2 标题、"
+                 "参与角色、一段 Mermaid `graph TD` 跨模块全链路图、编号步骤（每步注明所属模块并用 "
+                 "`[模块页](#anchor)` 链接）、关键分支与异常出口。这是产品经理的“上帝视角”，用业务语言。")
+    return "\n\n".join(parts)
+
+# --- system-level identity inference (which business system / layer) ----------
+
+def build_system_meta_prompt(owner: str, repo: str, readme: str, layer_hint: str) -> str:
+    return f"""判断仓库 {owner}/{repo} 属于哪个业务系统。README 摘录：
+<readme>
+{(readme or "")[:2000]}
+</readme>
+技术层次线索：{layer_hint or "未知"}
+
+只返回如下 XML（不要解释、不要代码块）：
+<system_meta>
+  <system>[业务系统中文名，如 银河；从仓库名/README 推断，不确定就用仓库名主体]</system>
+  <layer>[前端|后端|小程序|网关|服务|工具 之一]</layer>
+  <tags>[业务域标签，逗号分隔，如 运单,面单]</tags>
+</system_meta>"""
+
+
+def parse_system_meta(text: str) -> dict:
+    m = re.search(r"<system_meta>[\s\S]*?</system_meta>", text or "")
+    if not m:
+        return {}
+    root = _parse_xml_lenient(_CONTROL_CHARS.sub("", m.group(0)))
+    if root is None:
+        return {}
+    tags = [t.strip() for t in re.split(r"[,，、]", _text(root.find("tags"))) if t.strip()]
+    return {"system": _text(root.find("system")) or None,
+            "layer": _text(root.find("layer")) or None,
+            "system_tags": tags or None}
+
+
+def _read_project_profile(owner: str, repo: str, repo_type: str) -> dict:
+    """Pre-generation AI scan result (written by /api/project/profile), if any."""
+    try:
+        from adalflow.utils import get_adalflow_default_root_path
+        p = os.path.join(get_adalflow_default_root_path(), "wikicache",
+                         f"deepwiki_profile_{repo_type}_{owner}_{repo}.json")
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _layer_hint(file_tree: str) -> str:
+    ft = file_tree or ""
+    hints = []
+    if re.search(r"(^|\n)[^\n]*(package\.json|nuxt\.config|vue\.config|vite\.config)", ft):
+        hints.append("前端(存在 package.json/前端构建配置)")
+    if re.search(r"(^|\n)[^\n]*(pom\.xml|build\.gradle)", ft):
+        hints.append("后端 Java(存在 pom.xml/gradle)")
+    if re.search(r"(^|\n)[^\n]*(app\.json|project\.config\.json)", ft):
+        hints.append("可能是小程序")
+    return "；".join(hints)
 
 
 # --- the runner --------------------------------------------------------------
@@ -1597,20 +2185,53 @@ def make_real_runner(*, self_base_url: Optional[str] = None, page_retries: int =
             # comprehensive coverage; single-pass otherwise. Feed the route/page/menu
             # surface either way.
             await ctx.set_phase("planning")
-            surface = extract_functional_surface(file_tree)
-            if _use_two_phase(req):
-                structure = await plan_two_phase(client, base, req, file_tree, readme, surface)
+            # System identity: keep whatever the prior cache has (manual edits win);
+            # infer only when absent.
+            system_meta = {}
+            try:
+                prior = await _load_cache(client, base, req)
+                profile = _read_project_profile(req.owner, req.repo, req.repo_type)
+                if profile.get("system") or profile.get("layer"):  # Registry = source of truth
+                    tags = list(profile.get("domains") or [])
+                    rg = profile.get("region")
+                    rg = rg if isinstance(rg, list) else ([rg] if rg else [])
+                    tags = [r for r in rg if r] + tags
+                    system_meta = {"system": profile.get("system"), "layer": profile.get("layer"),
+                                   "system_tags": tags or None}
+                    if profile.get("summary"):  # seed planning with the pre-scan summary
+                        readme = f"AI 预识别：{profile['summary']}\n\n{readme}"
+                elif prior and (prior.get("system") or prior.get("layer")):  # legacy cache fallback
+                    system_meta = {"system": prior.get("system"), "layer": prior.get("layer"),
+                                   "system_tags": prior.get("system_tags")}
+                else:
+                    meta_xml = await stream_chat(client, base, req, build_system_meta_prompt(
+                        req.owner, req.repo, readme, _layer_hint(file_tree)))
+                    system_meta = parse_system_meta(meta_xml)
+                    logger.info("inferred system meta: %s", system_meta)
+            except Exception as e:  # noqa: BLE001 — identity is best-effort
+                logger.warning("system meta inference failed: %s", e)
+            if req.lean:
+                # Lean: no module discovery at all — scaffold-only wiki. Indexing
+                # already ran above (the chat/field-trace substrate).
+                structure = {"id": "wiki", "title": req.repo, "description": "",
+                             "pages": [], "sections": [], "rootSections": []}
             else:
-                xml = await stream_chat(client, base, req,
-                                        build_structure_prompt(req.owner, req.repo, file_tree, readme,
-                                                               req.comprehensive, req.max_pages, surface))
-                structure = parse_structure(xml, req.comprehensive)
+                surface = extract_functional_surface(file_tree)
+                if _use_two_phase(req):
+                    structure = await plan_two_phase(client, base, req, file_tree, readme, surface)
+                else:
+                    xml = await stream_chat(client, base, req,
+                                            build_structure_prompt(req.owner, req.repo, file_tree, readme,
+                                                                   req.comprehensive, req.max_pages, surface))
+                    structure = parse_structure(xml, req.comprehensive)
 
             # Prepend the guaranteed foundational pages (overview, getting-started,
             # architecture, deployment, structure, config, glossary) — discovery alone
             # doesn't reliably produce them.
+            LEAN_IDS = ["found-overview", "found-getting-started", "found-architecture",
+                        "found-deployment", SCAFFOLD_GLOSSARY_ID, SCAFFOLD_API_ID]
             scaffold_pages, scaffold_sections = build_scaffold(
-                file_tree, selected_foundational(req.foundational))
+                file_tree, LEAN_IDS if req.lean else selected_foundational(req.foundational))
             structure = prepend_scaffold(structure, scaffold_pages, scaffold_sections)
 
             pages = structure["pages"]
@@ -1618,19 +2239,41 @@ def make_real_runner(*, self_base_url: Optional[str] = None, page_retries: int =
             if not pages:
                 raise JobFailed("planning_failed", "Wiki structure contained no pages")
 
-            # Extra grounding for two scaffold pages: the structure page gets the file
-            # tree; the glossary page gets the module map + i18n labels (so it's complete).
+            # Extra grounding for scaffold pages: structure page — file tree; glossary
+            # page — term list; API-inventory page — harvested endpoint list.
             tree_ctx = ("Project file tree (authoritative for directory structure and paths):\n"
                         f"<file_tree>\n{_trim_tree(file_tree)}\n</file_tree>")
             glossary_ctx = await asyncio.to_thread(
                 build_glossary_context, clone_dir, file_tree, structure)
+            api_ctx = await asyncio.to_thread(build_api_context, clone_dir)
+            fmap_ctx = await asyncio.to_thread(build_feature_map_context, clone_dir, structure)
+            rules_ctx = await asyncio.to_thread(build_rules_context, clone_dir, structure)
+            states_ctx = await asyncio.to_thread(build_states_context, clone_dir)
+            journeys_ctx = ""  # built AFTER other pages exist (see deferred pass below)
+
+            titles_ctx = ("本 wiki 全部页面标题（「后续阅读」等跨页链接只能从中选取，格式 [标题](#标题)）：\n"
+                          + "\n".join(f"- {p.get('title')}" for p in structure["pages"] if p.get("title")))
 
             def _extra_ctx(page):
+                if page["id"] == "found-overview":
+                    return titles_ctx
                 if page["id"] == SCAFFOLD_STRUCTURE_ID:
                     return tree_ctx
                 if page["id"] == SCAFFOLD_GLOSSARY_ID:
-                    return glossary_ctx
-                return ""
+                    return glossary_ctx + "\n\n" + titles_ctx
+                if page["id"] == SCAFFOLD_API_ID:
+                    return api_ctx + "\n\n" + titles_ctx
+                if page["id"] == SCAFFOLD_FEATURE_MAP_ID:
+                    return fmap_ctx + "\n\n" + titles_ctx
+                if page["id"] == SCAFFOLD_RULES_ID:
+                    return rules_ctx + "\n\n" + titles_ctx
+                if page["id"] == SCAFFOLD_STATES_ID:
+                    return states_ctx + "\n\n" + titles_ctx
+                if page["id"] == SCAFFOLD_JOURNEYS_ID:
+                    return journeys_ctx
+                # Every ordinary page also gets the real page-title list, so cross-page
+                # links ([标题](#标题)) are never invented.
+                return titles_ctx
 
             # Edit protection: carry over any page the user hand-edited (edited=True in
             # the previous cache, matched by title) instead of regenerating & overwriting
@@ -1662,7 +2305,7 @@ def make_real_runner(*, self_base_url: Optional[str] = None, page_retries: int =
                             "id": page["id"], "title": page["title"], "content": lk.get("content", ""),
                             "filePaths": page["filePaths"], "importance": page["importance"],
                             "relatedPages": page["relatedPages"], "type": page.get("type", "feature"),
-                            "edited": True, "updated_at": lk.get("updated_at"),
+                            "tags": page.get("tags") or [], "edited": True, "updated_at": lk.get("updated_at"),
                             "prev_content": lk.get("prev_content"),
                         }
                         ctx.page_done()
@@ -1672,11 +2315,17 @@ def make_real_runner(*, self_base_url: Optional[str] = None, page_retries: int =
                         "id": page["id"], "title": page["title"], "content": content,
                         "filePaths": page["filePaths"], "importance": page["importance"],
                         "relatedPages": page["relatedPages"], "type": page.get("type", "feature"),
-                        "edited": False, "updated_at": now_ms,
+                        "tags": page.get("tags") or [], "edited": False, "updated_at": now_ms,
                     }
                     ctx.page_done(failed=not ok)
 
-            await asyncio.gather(*(gen_one(p) for p in pages))
+            # Journeys chain the other pages' flows — generate them LAST.
+            deferred = [p for p in pages if p["id"] == SCAFFOLD_JOURNEYS_ID]
+            normal = [p for p in pages if p["id"] != SCAFFOLD_JOURNEYS_ID]
+            await asyncio.gather(*(gen_one(p) for p in normal))
+            if deferred:
+                journeys_ctx = build_journeys_context(structure, generated)
+                await asyncio.gather(*(gen_one(p) for p in deferred))
             ctx.set_current_page(None)
 
             if job.failed_pages >= len(pages):
@@ -1686,6 +2335,6 @@ def make_real_runner(*, self_base_url: Optional[str] = None, page_retries: int =
             await ctx.set_phase("saving")
             await save_cache(client, base, req, structure, generated,
                              commit_id=commit_id, default_branch=default_branch,
-                             generated_at=int(time.time() * 1000))
+                             generated_at=int(time.time() * 1000), system_meta=system_meta)
 
     return runner

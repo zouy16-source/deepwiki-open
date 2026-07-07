@@ -187,7 +187,7 @@ Document only what is specific here; do NOT re-explain cross-cutting mechanisms.
   overview: `This is an OVERVIEW / entry page for ALL audiences (product, engineering, QA):
 - What the project/module does, its core value, and who its users are (2-3 short paragraphs).
 - A feature map: use a Mermaid \`graph TD\` to show the main modules and how they relate.
-- "Where to go next": link to the detailed module/reference pages with \`[Link Text](#page-anchor-or-id)\`.
+- A 「后续阅读」 section (use this EXACT Chinese heading): link the most important module/reference pages using REAL page titles, in the exact form \`[页面标题](#页面标题)\` — never invent page names or English slugs.
 Keep it high-level and leave the details to the linked pages.`,
 
   architecture: `This is an ARCHITECTURE page:
@@ -205,11 +205,12 @@ Keep it high-level and leave the details to the linked pages.`,
 - Numbered, step-by-step instructions with concrete commands / config examples.
 - Common problems and troubleshooting.`,
 
-  glossary: `This is the project GLOSSARY / business-terminology page. Be COMPREHENSIVE — readers expect FULL coverage, not a handful of terms; do NOT summarize or stop early.
-- Enumerate EVERY distinct domain / business term, entity, status, role and acronym used across the project. Draw them from the module list and the UI / i18n labels in the ADDITIONAL CONTEXT below, plus entities, fields, enums and statuses in the source files.
-- GROUP terms by domain (e.g. 账户、面单、单号与回收、销售、系统与权限 …) with a Chinese H2 or H3 per group; within each group use a Markdown table with columns: 术语 | 英文/缩写 | 定义 | 所属模块.
-- Link the "where it is used" cell to the relevant wiki page with \`[Link Text](#page-anchor-or-id)\` when possible.
-- Include acronyms and bilingual mappings (e.g. SSO, VIP, GIS; 面单 / waybill). Aim for breadth — a real business system has dozens of terms; cover the labels listed in the context.`,
+  glossary: `This is the project GLOSSARY — a BUSINESS FIELD dictionary (业务术语与字段词典). Be COMPREHENSIVE — readers expect FULL coverage, not a handful of terms; do NOT summarize or stop early.
+- Enumerate EVERY business term, document/entity, fee item, status and enum used across the project, TOGETHER WITH its code identifier: the API/form field name (e.g. 运单号 → waybillNo) or the enum/constant code (e.g. 订单转运单 → ORDER).
+- ONLY business vocabulary. Do NOT include generic page/UI wording — placeholders (请输入/请选择), buttons (确定/取消/保存/查询), date shortcuts (昨天/最近一周), navigation (首页/登录) — those are page attributes, not business terms.
+- GROUP terms by domain (e.g. 运单、费用、网点、货物、服务与派送 …) with a Chinese H2 or H3 per group; within each group use a Markdown table with columns: 术语 | 字段名/编码 | 定义 | 所属模块.
+- Fill the 字段名/编码 column from the source files; leave it as - only when no identifier exists. Link the 所属模块 cell to the relevant wiki page with \`[Link Text](#page-anchor-or-id)\` when possible.
+- Include acronyms and bilingual mappings (e.g. SSO, VIP, GIS; 面单 / waybill). Aim for breadth — a real business system has dozens of terms.`,
 }
 
 const DEDUP_RULE = `

@@ -51,7 +51,7 @@ const {
   isLoading, loadingMessage, error, embeddingError,
   wikiStructure, currentPageId, generatedPages, pagesInProgress,
   effectiveRepoInfo, isExporting, exportError, provider: curProvider, model: curModel,
-  pageBusy, pageActionError,
+  busyPages, pageActionError,
   generateFileUrl, loadData, exportWiki, selectPage,
   savePageEdit, regeneratePage, revertPage, fetchPageHistory,
 } = useWikiData({
@@ -70,7 +70,7 @@ const editContent = ref('')
 const regenOpen = ref(false)
 const instruction = ref('')
 const historyOpen = ref(false)
-const busy = computed(() => !!currentPage.value && pageBusy.value === currentPage.value.id)
+const busy = computed(() => !!currentPage.value && busyPages.value.has(currentPage.value.id))
 
 function fmtTime(ms?: number) {
   if (!ms) return ''
@@ -131,6 +131,114 @@ const breadcrumbItems = computed(() => [
   { label: 'Wiki 文档', icon: 'i-lucide-book-marked', to: '/wikis' },
   { label: `${owner}/${repo}` },
 ])
+
+// --- tag filter (sidebar) ---
+const selectedTags = ref<string[]>([])
+const allTags = computed(() => {
+  const order: string[] = []
+  const seen = new Set<string>()
+  for (const p of wikiStructure.value?.pages || [])
+    for (const t of p.tags || []) if (!seen.has(t)) { seen.add(t); order.push(t) }
+  return order
+})
+// Pages must carry ALL selected tags (e.g. 产品 ∧ 费用); empty sections are hidden.
+const filteredStructure = computed(() => {
+  const ws = wikiStructure.value
+  if (!ws || !selectedTags.value.length) return ws
+  const sel = selectedTags.value
+  const keep = new Set(ws.pages.filter((p) => sel.every((t) => (p.tags || []).includes(t))).map((p) => p.id))
+  const sections = (ws.sections || [])
+    .map((s) => ({ ...s, pages: s.pages.filter((id) => keep.has(id)) }))
+    .filter((s) => s.pages.length)
+  const secIds = new Set(sections.map((s) => s.id))
+  for (const s of sections) if (s.subsections) s.subsections = s.subsections.filter((id) => secIds.has(id))
+  return {
+    ...ws,
+    pages: ws.pages.filter((p) => keep.has(p.id)),
+    sections,
+    rootSections: (ws.rootSections || []).filter((id) => secIds.has(id)),
+  }
+})
+
+// --- full-text search (sidebar) ---
+const searchQuery = ref('')
+const searchHits = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return [] as { id: string, title: string, snippet: string }[]
+  const hits: { id: string, title: string, snippet: string, inTitle: boolean }[] = []
+  for (const p of wikiStructure.value?.pages || []) {
+    const content = generatedPages.value[p.id]?.content || ''
+    const inTitle = p.title.toLowerCase().includes(q)
+    const ci = content.toLowerCase().indexOf(q)
+    if (!inTitle && ci < 0) continue
+    const snippet = ci >= 0 ? content.slice(Math.max(0, ci - 28), ci + 52).replace(/[\n|#`*]/g, ' ').trim() : ''
+    hits.push({ id: p.id, title: p.title, snippet, inTitle })
+    if (hits.length >= 20) break
+  }
+  return hits.sort((a, b) => Number(b.inTitle) - Number(a.inTitle)).slice(0, 12)
+})
+function openHit(id: string) {
+  selectPage(id)
+  searchQuery.value = ''
+}
+
+// --- cross-page anchor links ---
+// Generated pages link to each other as [标题](#标题) (page-anchor convention), but
+// this is an SPA rendering ONE page at a time — no element carries that id. Intercept
+// clicks on '#…' links: resolve the fragment against page titles/ids → selectPage;
+// otherwise fall back to a real in-page heading anchor if one exists.
+function normAnchor(s: string): string {
+  let t = s || ''
+  try { t = decodeURIComponent(t) } catch { /* keep raw */ }
+  return t.replace(/^#/, '').replace(/[\s\-_.、·，,:：（）()]/g, '').toLowerCase()
+}
+function onContentClick(e: MouseEvent) {
+  const a = (e.target as HTMLElement)?.closest?.('a')
+  if (!a) return
+  const href = a.getAttribute('href') || ''
+  if (href && !href.startsWith('#')) return
+  const frag = normAnchor(href)
+  if (!frag && !href) {
+    // 空链接 [标题]()：按文字解析成页面跳转；解析不到也吞掉（避免刷新页面）
+    e.preventDefault()
+  }
+  const pages = wikiStructure.value?.pages || []
+  let hit = pages.find((p) => normAnchor(p.title) === frag || normAnchor(p.id) === frag)
+  if (!hit) {
+    // partial match (LLM sometimes shortens the title) — only when unambiguous
+    const cands = pages.filter((p) => {
+      const n = normAnchor(p.title)
+      return n.includes(frag) || frag.includes(n)
+    })
+    if (cands.length === 1) hit = cands[0]
+  }
+  if (!hit) {
+    // fragment is an invented slug (e.g. #waybill-biz-flow) — resolve by link TEXT
+    const txt = normAnchor(a.textContent || '')
+    if (txt) {
+      hit = pages.find((p) => normAnchor(p.title) === txt)
+      if (!hit) {
+        const cands = pages.filter((p) => {
+          const n = normAnchor(p.title)
+          return n.includes(txt) || txt.includes(n)
+        })
+        if (cands.length === 1) hit = cands[0]
+      }
+    }
+  }
+  if (hit) {
+    e.preventDefault()
+    selectPage(hit.id)
+    return
+  }
+  const el = document.getElementById(href.slice(1)) || document.getElementById(normAnchor(href))
+  if (el) {
+    e.preventDefault()
+    el.scrollIntoView({ behavior: 'smooth' })
+  } else {
+    e.preventDefault() // dead anchor: swallow instead of polluting the URL hash
+  }
+}
 
 const contentEl = ref<HTMLElement | null>(null)
 watch(currentPageId, () => {
@@ -235,18 +343,40 @@ onMounted(loadData)
             </template>
           <p class="text-muted text-sm mb-2 leading-relaxed">{{ wikiStructure.description }}</p>
 
-          <!-- <h4 class="text-md font-semibold text-default mb-3">{{ t('repoPage.pages') }}</h4> -->
-          <WikiTreeView :wiki-structure="wikiStructure" :current-page-id="currentPageId" @page-select="selectPage" />
+          <!-- Full-text search + tag filter (same row; keeps the tree tall) -->
+          <div class="flex items-center gap-1.5 mb-2">
+            <UInput v-model="searchQuery" icon="i-lucide-search" size="sm" placeholder="搜索 wiki 内容…" class="flex-1 min-w-0" />
+            <!-- 标签筛选暂时隐藏（使用率低）；要恢复时删掉 v-if="false" 即可，筛选逻辑保留 -->
+            <USelectMenu
+              v-if="false"
+              v-model="selectedTags" :items="allTags" multiple size="sm"
+              placeholder="标签" class="w-28 shrink-0" :search-input="false"
+            />
+          </div>
+          <div v-if="searchQuery.trim()" class="space-y-1 mb-2">
+            <button
+              v-for="h in searchHits" :key="h.id"
+              class="w-full text-left px-2 py-1.5 rounded-md hover:bg-default border border-transparent hover:border-default transition-colors"
+              @click="openHit(h.id)"
+            >
+              <div class="text-sm text-default truncate">{{ h.title }}</div>
+              <div v-if="h.snippet" class="text-xs text-muted truncate">…{{ h.snippet }}…</div>
+            </button>
+            <p v-if="!searchHits.length" class="text-xs text-muted px-2 py-1">无匹配结果</p>
+          </div>
+
+          <WikiTreeView v-if="!searchQuery.trim()" :wiki-structure="filteredStructure || wikiStructure" :current-page-id="currentPageId" @page-select="selectPage" />
           </UDashboardSidebar>
 
         <!-- Content -->
-        <div id="wiki-content" ref="contentEl" class="w-full flex-grow p-6 lg:p-8 overflow-y-auto [scrollbar-gutter:stable]">
+        <div id="wiki-content" ref="contentEl" class="w-full flex-grow p-6 lg:p-8 overflow-y-auto [scrollbar-gutter:stable]" @click="onContentClick">
           <div v-if="currentPage" class="max-w-full mx-auto pb-28">
             <!-- Title + per-page actions -->
             <div class="flex items-start justify-between gap-3 mb-4 flex-wrap">
               <div class="min-w-0">
                 <h3 class="text-xl font-bold text-default break-words">{{ currentPage.title }}</h3>
-                <div class="flex items-center gap-2 mt-1 text-xs text-muted">
+                <div class="flex items-center gap-1.5 mt-1 text-xs text-muted flex-wrap">
+                  <UBadge v-for="tg in currentPage.tags || []" :key="tg" color="neutral" variant="soft" size="xs" :label="tg" />
                   <UBadge v-if="currentPage.edited" color="warning" variant="soft" size="xs" label="已手动编辑" />
                   <span v-if="currentPage.updated_at">更新于 {{ fmtTime(currentPage.updated_at) }}</span>
                 </div>
@@ -257,6 +387,16 @@ onMounted(loadData)
                 <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-history" label="历史" :disabled="busy" @click="openHistory" />
                 <UButton v-if="currentPage.prev_content" color="neutral" variant="ghost" size="xs" icon="i-lucide-undo-2" label="回滚" :loading="busy" :disabled="busy" @click="doRevert" />
               </div>
+            </div>
+
+            <!-- Persistent in-flight banner: survives navigating away and back (busyPages
+                 keeps the page marked while its regeneration runs in the background). -->
+            <div
+              v-if="busy"
+              class="mb-4 flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-primary"
+            >
+              <UIcon name="i-lucide-loader-circle" class="animate-spin shrink-0" />
+              <span>本页正在重新生成中，完成后将自动更新显示（术语表等大页约 3-6 分钟）。可先浏览其他页面，稍后回来查看。</span>
             </div>
 
             <!-- Regenerate panel (optional instruction) -->

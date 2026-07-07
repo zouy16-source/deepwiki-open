@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// GitLab repo list using Nuxt UI UTable. «生成» now starts a background job on the
-// backend (POST /api/wiki/generate) instead of navigating to the detail page; the
-// list polls /api/wiki/jobs and shows live progress (phase + bar + ETA) per repo.
-import type { TableColumn } from '@nuxt/ui'
+// GitLab repo card grid. «生成» starts a background job on the backend
+// (POST /api/wiki/generate); the list polls /api/wiki/jobs and shows live progress
+// (phase + bar + ETA) per repo. «AI 识别» does a light pre-scan (file tree + README,
+// one LLM call, no clone) answering "这个系统是做什么的" and seeding later generation.
 
 interface GitlabProject {
   pathWithNamespace: string
@@ -176,6 +176,31 @@ function ensurePolling() {
   if (!pollTimer) schedulePoll(2500)
 }
 
+// --- generation confirm (full generation is long & costly; prevent misclicks) ---
+const genConfirmOpen = ref(false)
+const genPending = ref<{ row: Row, force: boolean, mode: 'full' | 'incremental' } | null>(null)
+
+function genConfirmText(): string {
+  const p = genPending.value
+  if (!p) return ''
+  if (p.mode === 'incremental')
+    return `增量更新只重新生成受代码改动影响的页面，通常几分钟。确定更新「${p.row.p.name}」吗？`
+  if (p.force)
+    return `重新生成会覆盖「${p.row.p.name}」现有 wiki（手动编辑过的页面会保留），全流程约 10-20 分钟。确定继续吗？`
+  return `生成完整 wiki 需要克隆仓库、建立索引并生成几十个页面，通常需要 10-20 分钟。确定开始生成「${p.row.p.name}」吗？`
+}
+
+function askGen(row: Row, force = false, mode: 'full' | 'incremental' = 'full') {
+  genPending.value = { row, force, mode }
+  genConfirmOpen.value = true
+}
+
+function confirmGen() {
+  const p = genPending.value
+  genConfirmOpen.value = false
+  if (p) void startGen(p.row, p.force, p.mode)
+}
+
 async function startGen(row: Row, force = false, mode: 'full' | 'incremental' = 'full') {
   try {
     const job = await $fetch<Job>('/api/wiki/generate', {
@@ -219,6 +244,7 @@ function submitSearch() {
 
 onMounted(() => {
   loadGenerated()
+  loadProfiles()
   fetchJobs()
   watch([query, page], loadProjects, { immediate: true })
   watch([generated, projects], checkUpdateStatus)
@@ -236,13 +262,137 @@ const rows = computed<Row[]>(() =>
   }),
 )
 
-const columns: TableColumn<Row>[] = [
-  { accessorKey: 'path', header: '仓库路径' },
-  { accessorKey: 'description', header: '仓库介绍' },
-  { accessorKey: 'branch', header: '默认分支' },
-  { accessorKey: 'status', header: '状态', meta: { class: { th: 'w-52', td: 'w-52' } } },
-  { id: 'actions', header: '操作', meta: { class: { th: 'text-right', td: 'text-right' } } },
-]
+// --- AI pre-scan profiles ---
+interface Profile {
+  summary: string
+  region?: string | string[] | null
+  system?: string | null
+  layer?: string | null
+  domains?: string[]
+  tech?: string[]
+}
+const profiles = ref<Map<string, Profile>>(new Map())
+const scanning = ref<Set<string>>(new Set())
+
+async function loadProfiles() {
+  try {
+    const data = await $fetch<Record<string, Profile>>('/api/project/profiles')
+    profiles.value = new Map(Object.entries(data || {}))
+  } catch { /* best-effort */ }
+}
+
+function profileOf(row: Row): Profile | undefined {
+  return profiles.value.get(keyOf(row.owner, row.repo))
+}
+
+// --- profile-based filters (地区/系统/层次/业务域), AND-combined; 未识别项目在
+// 任一筛选激活时隐藏（它们没有画像元数据）。
+const ALL = '全部'
+const regionFilter = ref(ALL)
+const systemFilter = ref(ALL)
+const layerFilter = ref(ALL)
+const domainFilter = ref(ALL)
+
+function regionsOf(pf?: Profile): string[] {
+  const r = pf?.region
+  return Array.isArray(r) ? r : (r ? String(r).split(/[,，、/]/).map((t) => t.trim()).filter(Boolean) : [])
+}
+
+const filterOptions = computed(() => {
+  const regions = new Set<string>()
+  const systems = new Set<string>()
+  const layers = new Set<string>()
+  const domains = new Set<string>()
+  for (const r of rows.value) {
+    const pf = profileOf(r)
+    if (!pf) continue
+    for (const rg of regionsOf(pf)) regions.add(rg)
+    if (pf.system) systems.add(pf.system)
+    if (pf.layer) layers.add(pf.layer)
+    for (const d of pf.domains || []) domains.add(d)
+  }
+  return {
+    regions: [ALL, ...regions],
+    systems: [ALL, ...systems],
+    layers: [ALL, ...layers],
+    domains: [ALL, ...domains],
+  }
+})
+
+const filterActive = computed(() =>
+  [regionFilter, systemFilter, layerFilter, domainFilter].some((f) => f.value !== ALL),
+)
+
+const viewRows = computed(() => {
+  if (!filterActive.value) return rows.value
+  return rows.value.filter((r) => {
+    const pf = profileOf(r)
+    if (!pf) return false
+    if (regionFilter.value !== ALL && !regionsOf(pf).includes(regionFilter.value)) return false
+    if (systemFilter.value !== ALL && pf.system !== systemFilter.value) return false
+    if (layerFilter.value !== ALL && pf.layer !== layerFilter.value) return false
+    if (domainFilter.value !== ALL && !(pf.domains || []).includes(domainFilter.value)) return false
+    return true
+  })
+})
+
+async function scanProject(row: Row, silent = false): Promise<boolean> {
+  const k = keyOf(row.owner, row.repo)
+  if (scanning.value.has(k)) return false
+  scanning.value = new Set(scanning.value).add(k)
+  try {
+    const p = await $fetch<Profile>('/api/project/profile', {
+      method: 'POST',
+      timeout: 270_000, // 大仓库文件树逐页拉取可能要几分钟
+      body: { owner: row.owner, repo: row.repo, repo_type: 'gitlab', repo_url: row.p.webUrl || '' },
+    })
+    const m = new Map(profiles.value)
+    m.set(k, p)
+    profiles.value = m
+    return true
+  } catch (e) {
+    if (!silent) {
+      const detail = (e as { data?: { detail?: string } })?.data?.detail
+      toast.add({ title: 'AI 识别失败', description: detail || (e instanceof Error ? e.message : String(e)), color: 'error' })
+    }
+    return false
+  } finally {
+    const s = new Set(scanning.value)
+    s.delete(k)
+    scanning.value = s
+  }
+}
+
+// --- batch scan: all unprofiled repos on the current page, 3 at a time ---
+const batchRunning = ref(false)
+const batchDone = ref(0)
+const batchTotal = ref(0)
+async function batchScan() {
+  if (batchRunning.value) return
+  // 当页所有项目全部（重新）识别，已识别的也重扫（画像规则升级后可刷新存量）。
+  const targets = rows.value.filter((r) => !scanning.value.has(keyOf(r.owner, r.repo)))
+  if (!targets.length) return
+  batchRunning.value = true
+  batchTotal.value = targets.length
+  batchDone.value = 0
+  let ok = 0
+  const queue = [...targets]
+  const worker = async () => {
+    for (;;) {
+      const row = queue.shift()
+      if (!row) return
+      if (await scanProject(row, true)) ok++
+      batchDone.value++
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(3, queue.length) }, worker))
+  batchRunning.value = false
+  toast.add({
+    title: '批量识别完成',
+    description: `成功 ${ok} 个${ok < batchTotal.value ? `，失败 ${batchTotal.value - ok} 个` : ''}`,
+    color: ok === batchTotal.value ? 'success' : 'warning',
+  })
+}
 
 const PHASE_LABEL: Record<string, string> = {
   fetching_repo: '拉取仓库',
@@ -269,114 +419,152 @@ function fmtEta(s: number | null): string {
 
 <template>
   <div class="flex flex-col h-full min-h-0 p-4 sm:p-6">
-    <form class="mb-4 shrink-0" @submit.prevent="submitSearch">
-      <UInput
-        v-model="searchInput"
-        icon="i-lucide-search"
-        size="lg"
-        placeholder="搜索仓库(名称、路径或介绍),回车搜索…"
-        class="w-full"
+    <!-- 搜索 + 画像筛选（地区/系统/层次/业务域）+ 批量识别，同一行（窄屏自动换行） -->
+    <div class="mb-4 shrink-0 flex items-center gap-2 flex-wrap">
+      <form class="flex-1 min-w-[220px]" @submit.prevent="submitSearch">
+        <UInput
+          v-model="searchInput"
+          icon="i-lucide-search"
+          size="sm"
+          placeholder="搜索仓库，回车搜索…"
+          class="w-full"
+        />
+      </form>
+      <label class="flex items-center gap-1 text-sm text-muted shrink-0">地区
+        <USelectMenu v-model="regionFilter" :items="filterOptions.regions" size="sm" class="w-28" />
+      </label>
+      <label class="flex items-center gap-1 text-sm text-muted shrink-0">系统
+        <USelectMenu v-model="systemFilter" :items="filterOptions.systems" size="sm" class="w-40" />
+      </label>
+      <label class="flex items-center gap-1 text-sm text-muted shrink-0">层次
+        <USelectMenu v-model="layerFilter" :items="filterOptions.layers" size="sm" class="w-24" />
+      </label>
+      <label class="flex items-center gap-1 text-sm text-muted shrink-0">业务域
+        <USelectMenu v-model="domainFilter" :items="filterOptions.domains" size="sm" class="w-32" />
+      </label>
+      <UButton
+        v-if="filterActive" color="neutral" variant="ghost" size="xs" icon="i-lucide-x"
+        title="清除筛选（筛选时未识别的项目会被隐藏）" aria-label="清除筛选" class="shrink-0"
+        @click="regionFilter = systemFilter = layerFilter = domainFilter = ALL"
       />
-    </form>
+      <UButton
+        color="neutral" variant="outline" size="sm" icon="i-lucide-sparkles"
+        :label="batchRunning ? `识别中 ${batchDone}/${batchTotal}` : `批量识别 (${rows.length})`"
+        :loading="batchRunning"
+        :disabled="!rows.length && !batchRunning"
+        title="对本页所有项目（含已识别）重新执行 AI 识别（并发 3）"
+        class="shrink-0"
+        @click="batchScan"
+      />
+    </div>
 
     <p v-if="error" class="mb-4 shrink-0 text-sm text-error">加载出错:{{ error }}</p>
 
-    <UTable
-      :data="rows"
-      :columns="columns"
-      :loading="loading"
-      :empty="'没有仓库'"
-      :sticky="true"
-      class="flex-1 min-h-0 border border-default rounded-lg"
-    >
-      <template #path-cell="{ row }">
-        <a
-          v-if="row.original.p.webUrl"
-          :href="row.original.p.webUrl"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="font-mono text-primary hover:underline"
-        >{{ row.original.p.pathWithNamespace }}</a>
-        <span v-else class="font-mono">{{ row.original.p.pathWithNamespace }}</span>
-      </template>
+    <p v-if="loading" class="mb-4 shrink-0 text-sm text-muted">加载中…</p>
+    <p v-else-if="!viewRows.length" class="mb-4 shrink-0 text-sm text-muted">{{ filterActive ? '没有符合筛选条件的项目' : '没有仓库' }}</p>
 
-      <template #description-cell="{ row }">
-        <span class="text-muted line-clamp-1 max-w-xs block" :title="row.original.p.description || ''">
-          {{ row.original.p.description || '—' }}
-        </span>
-      </template>
-
-      <template #branch-cell="{ row }">
-        <span class="text-muted">{{ row.original.p.defaultBranch || '—' }}</span>
-      </template>
-
-      <template #status-cell="{ row }">
-        <div v-if="isActive(row.original.job)" class="min-w-[10rem]">
-          <div class="flex items-center justify-between text-xs mb-1">
-            <span class="text-primary truncate">{{ statusText(row.original.job!) }}</span>
-            <span class="text-muted shrink-0 ml-2">{{ row.original.job!.progress.percent }}%</span>
+    <div class="flex-1 min-h-0 overflow-y-auto">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-4">
+        <div
+          v-for="row in viewRows" :key="row.p.pathWithNamespace"
+          class="border border-default rounded-lg bg-elevated p-4 flex flex-col gap-2.5 hover:shadow-md hover:border-primary/40 transition-all"
+        >
+          <!-- 仓库名 + 状态徽章 -->
+          <div class="flex items-start justify-between gap-2 min-w-0">
+            <span class="font-semibold text-default leading-snug break-all">{{ row.p.name }}</span>
+            <div class="shrink-0">
+              <UBadge v-if="isActive(row.job)" color="primary" variant="soft" size="sm" label="生成中" />
+              <UBadge v-else-if="row.isGenerated" color="success" variant="soft" size="sm" label="已生成" />
+              <UBadge v-else-if="row.job?.status === 'failed'" color="error" variant="soft" size="sm" label="失败" :title="row.job?.error?.message || ''" />
+              <UBadge v-else color="neutral" variant="outline" size="sm" label="未生成" />
+            </div>
           </div>
-          <div class="h-1.5 bg-muted rounded-full overflow-hidden">
-            <div class="h-full bg-primary rounded-full transition-all duration-500" :style="{ width: `${row.original.job!.progress.percent}%` }" />
+
+          <!-- AI 识别结果 / 仓库介绍（固定最小高度，识别前后卡片高度一致） -->
+          <div class="min-h-[4.25rem]">
+            <template v-if="profileOf(row)">
+              <p class="text-xs text-default leading-relaxed line-clamp-2" :title="profileOf(row)!.summary">
+                <UIcon name="i-lucide-sparkles" class="text-primary inline-block align-text-top mr-0.5" />{{ profileOf(row)!.summary }}
+              </p>
+              <div class="flex gap-1 mt-1.5 overflow-hidden h-5">
+                <UBadge v-for="rg in regionsOf(profileOf(row))" :key="rg" color="warning" variant="soft" size="sm" class="shrink-0" :label="rg" />
+                <UBadge v-if="profileOf(row)!.system" color="primary" variant="soft" size="sm" class="shrink-0" :label="profileOf(row)!.system!" />
+                <UBadge v-if="profileOf(row)!.layer" color="secondary" variant="soft" size="sm" class="shrink-0" :label="profileOf(row)!.layer!" />
+                <UBadge v-for="d in (profileOf(row)!.domains || []).slice(0, 3)" :key="d" color="neutral" variant="soft" size="sm" class="shrink-0" :label="d" />
+                <UBadge
+                  v-if="(profileOf(row)!.domains || []).length > 3"
+                  color="neutral" variant="soft" size="sm" class="shrink-0"
+                  :label="`+${(profileOf(row)!.domains || []).length - 3}`"
+                  :title="(profileOf(row)!.domains || []).slice(3).join('、')"
+                />
+              </div>
+            </template>
+            <p v-else class="text-xs text-muted line-clamp-2" :title="row.p.description || ''">
+              {{ row.p.description || '暂无介绍，可用 AI 识别' }}
+            </p>
           </div>
-          <div class="flex items-center justify-between text-[11px] text-muted mt-1 h-4">
-            <span v-if="row.original.job!.phase === 'generating' && row.original.job!.progress.total_pages" class="truncate">
-              {{ row.original.job!.progress.done_pages }}/{{ row.original.job!.progress.total_pages }} 页
-            </span>
-            <span v-else />
-            <span v-if="row.original.job!.timing.eta_seconds != null" class="shrink-0 ml-2">{{ fmtEta(row.original.job!.timing.eta_seconds) }}</span>
+
+          <!-- git 路径 + 分支 + 更新状态 -->
+          <div class="mt-auto pt-1 space-y-1.5 text-xs text-muted min-w-0">
+            <a :href="row.p.webUrl || '#'" target="_blank" rel="noopener noreferrer" class="flex items-center gap-1.5 hover:text-primary transition-colors min-w-0">
+              <UIcon name="i-fa6-brands-gitlab" class="shrink-0" />
+              <span class="truncate font-mono">{{ row.p.pathWithNamespace }}</span>
+            </a>
+            <div class="flex items-center gap-2">
+              <span class="flex items-center gap-1"><UIcon name="i-lucide-git-branch" />{{ row.p.defaultBranch || '—' }}</span>
+              <UBadge v-if="statusOf(row)?.status === 'behind'" color="warning" variant="soft" size="xs" :label="`落后 ${statusOf(row)?.behind_count ?? '?'} 提交`" />
+              <span v-else-if="row.isGenerated && statusOf(row)?.status === 'up_to_date'">已是最新</span>
+            </div>
+          </div>
+
+          <!-- 操作（生成中时进度条内联在本行，高度不变） -->
+          <div class="flex items-center gap-1.5 pt-1 h-7">
+            <template v-if="isActive(row.job)">
+              <div
+                class="flex-1 min-w-0 flex items-center gap-1.5 text-[11px]"
+                :title="`${row.job!.phase === 'generating' && row.job!.progress.total_pages ? `${row.job!.progress.done_pages}/${row.job!.progress.total_pages} 页 · ` : ''}${row.job!.timing.eta_seconds != null ? fmtEta(row.job!.timing.eta_seconds) : ''}`"
+              >
+                <span class="text-primary truncate shrink-0 max-w-[5.5rem]">{{ statusText(row.job!) }}</span>
+                <div class="flex-1 min-w-[2.5rem] h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div class="h-full bg-primary rounded-full transition-all duration-500" :style="{ width: `${row.job!.progress.percent}%` }" />
+                </div>
+                <span class="text-muted shrink-0">{{ row.job!.progress.percent }}%</span>
+              </div>
+              <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-x" title="取消生成" aria-label="取消生成" @click="cancelGen(row)" />
+            </template>
+            <UButton
+              v-if="!isActive(row.job)"
+              color="neutral" variant="outline" size="xs" icon="i-lucide-sparkles"
+              :label="profileOf(row) ? '重新识别' : 'AI 识别'"
+              :loading="scanning.has(keyOf(row.owner, row.repo))"
+              title="AI 快速识别项目（文件树+README，不做完整索引）"
+              @click="scanProject(row)"
+            />
+            <template v-if="!isActive(row.job) && row.isGenerated">
+              <UButton :to="row.viewHref" color="primary" variant="solid" size="xs" label="查看" />
+              <UButton
+                v-if="statusOf(row)?.status === 'behind'"
+                color="warning" variant="soft" size="xs" icon="i-lucide-arrow-up-circle" label="增量更新"
+                title="仅重生成受改动影响的页面" @click="askGen(row, false, 'incremental')"
+              />
+              <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-rotate-cw" title="重新生成(覆盖)" @click="askGen(row, true)" />
+            </template>
+            <UButton v-else-if="!isActive(row.job) && row.job?.status === 'failed'" color="error" variant="soft" size="xs" label="重试" @click="askGen(row)" />
+            <UButton v-else-if="!isActive(row.job)" color="primary" variant="outline" size="xs" label="生成" @click="askGen(row)" />
           </div>
         </div>
-        <div v-else-if="row.original.isGenerated" class="flex flex-col items-start gap-1">
-          <UBadge color="success" variant="soft" size="sm" label="已生成" />
-          <UBadge
-            v-if="statusOf(row.original)?.status === 'behind'"
-            color="warning"
-            variant="soft"
-            size="xs"
-            :label="`落后 ${statusOf(row.original)?.behind_count ?? '?'} 提交`"
-          />
-          <span v-else-if="statusOf(row.original)?.status === 'up_to_date'" class="text-[11px] text-muted">已是最新</span>
-        </div>
-        <UBadge
-          v-else-if="row.original.job?.status === 'failed'"
-          color="error"
-          variant="soft"
-          size="sm"
-          label="失败"
-          :title="row.original.job?.error?.message || ''"
-        />
-        <UBadge v-else color="neutral" variant="outline" size="sm" label="未生成" />
-      </template>
+      </div>
+    </div>
 
-      <template #actions-cell="{ row }">
-        <UButton
-          v-if="isActive(row.original.job)"
-          color="neutral"
-          variant="ghost"
-          size="xs"
-          icon="i-lucide-x"
-          label="取消"
-          @click="cancelGen(row.original)"
-        />
-        <div v-else-if="row.original.isGenerated" class="flex items-center justify-end gap-1">
-          <UButton :to="row.original.viewHref" color="primary" variant="solid" size="xs" label="查看" />
-          <UButton
-            v-if="statusOf(row.original)?.status === 'behind'"
-            color="warning"
-            variant="soft"
-            size="xs"
-            icon="i-lucide-arrow-up-circle"
-            label="增量更新"
-            title="仅重生成受改动影响的页面"
-            @click="startGen(row.original, false, 'incremental')"
-          />
-          <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-rotate-cw" title="重新生成(覆盖)" @click="startGen(row.original, true)" />
+    <!-- 生成前确认（防误点：完整生成耗时长） -->
+    <UModal v-model:open="genConfirmOpen" title="确认生成" :description="genConfirmText()">
+      <template #footer>
+        <div class="flex justify-end gap-2 w-full">
+          <UButton color="neutral" variant="ghost" label="取消" @click="genConfirmOpen = false" />
+          <UButton color="primary" label="开始生成" icon="i-lucide-play" @click="confirmGen" />
         </div>
-        <UButton v-else-if="row.original.job?.status === 'failed'" color="error" variant="soft" size="xs" label="重试" @click="startGen(row.original)" />
-        <UButton v-else color="primary" variant="outline" size="xs" label="生成" @click="startGen(row.original)" />
       </template>
-    </UTable>
+    </UModal>
 
     <div v-if="!query" class="flex items-center justify-end gap-3 mt-4 shrink-0 text-sm text-muted">
       <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-chevron-left" :disabled="page <= 1 || loading" label="上一页" @click="page = Math.max(1, page - 1)" />
