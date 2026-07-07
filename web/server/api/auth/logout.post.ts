@@ -1,4 +1,4 @@
 export default defineEventHandler((event) => {
-  clearSession(event)
+  clearSessionCookie(event)
   return { ok: true }
 })

@@ -3,6 +3,6 @@
 export default defineEventHandler((event) => {
   return {
     enabled: authEnabled(),
-    user: getSession(event),
+    user: getSessionUser(event),
   }
 })

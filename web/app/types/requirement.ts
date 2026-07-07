@@ -28,6 +28,30 @@ export interface FlowEvent {
   created_at: string
 }
 
+// 评审单（FR-REV-01/02，requirement 服务）。conclusion 为空 = 评审中。
+export interface Review {
+  id: number
+  requirement_id: number
+  initiator: string
+  agenda: string
+  participants: string[]
+  scheduled_at: string | null
+  conclusion: 'approved' | 'conditional' | 'rejected' | null
+  conclusion_comment: string
+  concluded_by: string | null
+  concluded_at: string | null
+  created_at: string
+}
+
+// identity 服务的用户（经 BFF /api/users 代理），评审圈人用。
+export interface PlatformUser {
+  id: number
+  username: string
+  display_name: string
+  email: string
+  is_active: boolean
+}
+
 // identity 服务的项目空间（经 BFF /api/projects 代理）。
 export interface Project {
   id: number

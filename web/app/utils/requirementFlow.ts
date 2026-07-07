@@ -73,7 +73,18 @@ export const ARTIFACT_LABELS: Record<string, string> = {
   doc: '文档',
   mr: '代码变更',
   test_result: '测试结果',
+  review: '评审单',
 }
+
+// 评审结论（FR-REV-02）。approved/conditional 驱动 approve 流转，rejected 驱动 reject。
+export const REVIEW_CONCLUSIONS: Record<string, { label: string, color: string }> = {
+  approved: { label: '通过', color: 'success' },
+  conditional: { label: '有条件通过', color: 'warning' },
+  rejected: { label: '打回', color: 'error' },
+}
+
+// 这些动作由评审流程（RequirementReviews 组件）驱动，不出现在通用流转按钮里。
+export const REVIEW_MANAGED_ACTIONS = new Set(['start_review', 'approve', 'reject'])
 
 // 后端存 UTC naive 时间戳，先原样展示到分钟（时区统一待后端加 tz 后处理）。
 export function fmtTime(iso: string | null | undefined): string {

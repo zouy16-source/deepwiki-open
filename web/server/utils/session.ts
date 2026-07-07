@@ -40,11 +40,12 @@ export function setSession(event: H3Event, user: SessionUser): void {
   })
 }
 
-export function clearSession(event: H3Event): void {
+export function clearSessionCookie(event: H3Event): void {
   deleteCookie(event, COOKIE_NAME, { path: '/' })
 }
 
-export function getSession(event: H3Event): SessionUser | null {
+// 命名避开 h3 内置的 getSession（重名会触发 auto-import 冲突告警）
+export function getSessionUser(event: H3Event): SessionUser | null {
   const raw = getCookie(event, COOKIE_NAME)
   if (!raw) return null
   const dot = raw.lastIndexOf('.')

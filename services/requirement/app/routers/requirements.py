@@ -4,9 +4,10 @@ from sqlalchemy.orm import Session
 
 from ..auth import current_subject
 from ..db import get_db
+from ..flow import apply_transition
 from ..models import FlowEvent, Requirement
 from ..schemas import FlowEventOut, RequirementCreate, RequirementOut, TransitionIn
-from ..state_machine import InvalidTransition, next_status
+from ..state_machine import InvalidTransition
 
 router = APIRouter()
 
@@ -74,22 +75,14 @@ def transition(
     if req is None:
         raise HTTPException(404, "requirement not found")
     try:
-        to = next_status(req.status, body.action)
-    except InvalidTransition as e:
-        raise HTTPException(409, str(e))
-    db.add(
-        FlowEvent(
-            requirement_id=req.id,
-            from_status=req.status,
-            to_status=to,
-            action=body.action,
-            operator=subject,
+        apply_transition(
+            db, req, body.action, subject,
             comment=body.comment,
             artifact_type=body.artifact_type,
             artifact_ref=body.artifact_ref,
         )
-    )
-    req.status = to
+    except InvalidTransition as e:
+        raise HTTPException(409, str(e))
     db.commit()
     db.refresh(req)
     return req

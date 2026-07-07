@@ -1,6 +1,8 @@
+import json
 from datetime import date, datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class RequirementCreate(BaseModel):
@@ -36,6 +38,44 @@ class TransitionIn(BaseModel):
     comment: str = ""
     artifact_type: str | None = None  # analysis_report / doc / mr / test_result
     artifact_ref: str | None = None
+
+
+class ReviewCreate(BaseModel):
+    participants: list[str] = []
+    scheduled_at: datetime | None = None
+    agenda: str | None = None  # 不传则服务端按模板自动生成
+
+
+class ReviewConclude(BaseModel):
+    conclusion: Literal["approved", "conditional", "rejected"]
+    comment: str = ""
+
+
+class ReviewOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    requirement_id: int
+    initiator: str
+    agenda: str
+    participants: list[str]
+    scheduled_at: datetime | None
+    conclusion: str | None
+    conclusion_comment: str
+    concluded_by: str | None
+    concluded_at: datetime | None
+    created_at: datetime
+
+    @field_validator("participants", mode="before")
+    @classmethod
+    def _parse_participants(cls, v):
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                return parsed if isinstance(parsed, list) else []
+            except json.JSONDecodeError:
+                return []
+        return v
 
 
 class FlowEventOut(BaseModel):

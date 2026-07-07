@@ -25,7 +25,14 @@ const { data: parent } = useFetch<Requirement>(
   { immediate: false, watch: [() => req.value?.parent_id], default: () => null as Requirement | null },
 )
 
-const actions = computed<FlowAction[]>(() => (req.value ? allowedActions(req.value.status) : []))
+// start_review/approve/reject 由评审卡片（RequirementReviews）驱动，不在通用按钮出现
+const actions = computed<FlowAction[]>(() =>
+  (req.value ? allowedActions(req.value.status) : []).filter(a => !REVIEW_MANAGED_ACTIONS.has(a.action)),
+)
+
+async function onReviewChanged() {
+  await Promise.all([refreshReq(), refreshEvents()])
+}
 
 // 流转确认弹窗
 const pendingAction = ref<FlowAction | null>(null)
@@ -120,6 +127,9 @@ const timeline = computed(() => [...(events.value || [])].reverse())
           <p v-if="req.description" class="text-sm whitespace-pre-wrap leading-relaxed">{{ req.description }}</p>
           <p v-else class="text-sm text-muted">（未填写）</p>
         </UCard>
+
+        <!-- 评审（FR-REV-01/02） -->
+        <RequirementReviews :requirement="req" @changed="onReviewChanged" />
 
         <!-- 子需求 -->
         <UCard>

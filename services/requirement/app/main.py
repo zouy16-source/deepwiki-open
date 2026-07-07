@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from .config import settings
 from .db import Base, engine
-from .routers import requirements
+from .routers import requirements, reviews
 
 
 @asynccontextmanager
@@ -23,3 +23,4 @@ def health():
 
 
 app.include_router(requirements.router, prefix="/api/requirements", tags=["requirements"])
+app.include_router(reviews.router, prefix="/api", tags=["reviews"])

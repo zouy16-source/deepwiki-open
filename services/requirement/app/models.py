@@ -34,6 +34,30 @@ class Requirement(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class Review(Base):
+    """评审单（FR-REV-01/02）：发起时驱动 start_review 流转，结论驱动 approve/reject。
+
+    participants 存用户名 JSON 数组（用户档案在 identity 服务，跨服务不建外键）。
+    conclusion 为空 = 评审中；approved / conditional（有条件通过，同样进入排期）/ rejected。
+    """
+
+    __tablename__ = "review"
+
+    id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
+    requirement_id: Mapped[int] = mapped_column(
+        PK, ForeignKey("requirement.id"), index=True
+    )
+    initiator: Mapped[str] = mapped_column(String(64))
+    agenda: Mapped[str] = mapped_column(Text, default="")
+    participants: Mapped[str] = mapped_column(Text, default="[]")
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    conclusion: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    conclusion_comment: Mapped[str] = mapped_column(Text, default="")
+    concluded_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    concluded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class FlowEvent(Base):
     """状态流转留痕：操作人/时间/意见 + 关联 AI 产物（分析报告、文档、MR、测试结果）。"""
 

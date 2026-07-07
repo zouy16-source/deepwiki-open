@@ -4,7 +4,7 @@
 import type { H3Event } from 'h3'
 
 export function proxyPlatformService(event: H3Event, base: string) {
-  const session = getSession(event)
+  const session = getSessionUser(event)
   if (authEnabled() && !session) {
     throw createError({ statusCode: 401, statusMessage: 'not authenticated' })
   }
