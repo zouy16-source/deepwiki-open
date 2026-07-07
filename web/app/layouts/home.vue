@@ -25,6 +25,7 @@ const userMenuItems = computed<DropdownMenuItem[][]>(() => [
 const isDetail = computed(() => !!route.params.owner && !!route.params.repo)
 
 const navItems = computed<NavigationMenuItem[][]>(() => [[
+  { label: '需求管理', icon: 'i-lucide-clipboard-list', to: '/requirements', active: route.path.startsWith('/requirements') },
   { label: '项目列表', icon: 'i-lucide-folder-git-2', to: '/', active: route.path === '/' },
   { label: 'Wiki 文档', icon: 'i-lucide-book-marked', to: '/wikis', active: route.path === '/wikis' || isDetail.value },
 ]])
@@ -35,10 +36,14 @@ const devItems: NavigationMenuItem[][] = [[
 ]]
 
 const navTitle = computed(() => {
+  if (route.path.startsWith('/requirements')) return '需求管理'
   if (isDetail.value) return `${route.params.owner}/${route.params.repo}`
   return route.path === '/wikis' ? 'Wiki 文档(已生成)' : '项目列表(GitLab)'
 })
-const navBadge = computed(() => (route.path === '/wikis' ? '已生成' : isDetail.value ? '' : 'GitLab'))
+const navBadge = computed(() => {
+  if (route.path.startsWith('/requirements')) return ''
+  return route.path === '/wikis' ? '已生成' : isDetail.value ? '' : 'GitLab'
+})
 </script>
 
 <template>

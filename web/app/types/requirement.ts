@@ -1,0 +1,38 @@
+// requirement 服务（services/requirement）的 API 数据结构，经 BFF /api/requirements 代理。
+export interface Requirement {
+  id: number
+  project_id: number
+  parent_id: number | null
+  req_type: 'business' | 'system'
+  title: string
+  description: string
+  status: string
+  priority: 'P0' | 'P1' | 'P2'
+  complexity: string | null
+  expected_online_date: string | null
+  creator: string
+  created_at: string
+  updated_at: string
+}
+
+export interface FlowEvent {
+  id: number
+  requirement_id: number
+  from_status: string | null
+  to_status: string
+  action: string
+  operator: string
+  comment: string
+  artifact_type: string | null
+  artifact_ref: string | null
+  created_at: string
+}
+
+// identity 服务的项目空间（经 BFF /api/projects 代理）。
+export interface Project {
+  id: number
+  code: string
+  name: string
+  description: string
+  created_at: string
+}
