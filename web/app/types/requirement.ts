@@ -28,6 +28,21 @@ export interface FlowEvent {
   created_at: string
 }
 
+// 可行性分析执行记录（FR-ANA，requirement 服务；任务在 api 服务执行后回调）。
+export interface AnalysisRun {
+  id: number
+  requirement_id: number
+  task_id: string | null
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  summary: string
+  complexity: string | null
+  report_md: string
+  error: string
+  created_by: string
+  created_at: string
+  finished_at: string | null
+}
+
 // 评审单（FR-REV-01/02，requirement 服务）。conclusion 为空 = 评审中。
 export interface Review {
   id: number

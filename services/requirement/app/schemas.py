@@ -78,6 +78,32 @@ class ReviewOut(BaseModel):
         return v
 
 
+class AnalysisRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    requirement_id: int
+    task_id: str | None
+    status: str
+    summary: str
+    complexity: str | None
+    report_md: str
+    error: str
+    created_by: str
+    created_at: datetime
+    finished_at: datetime | None
+
+
+class AnalysisCallbackIn(BaseModel):
+    run_id: int
+    task_id: str = ""
+    status: Literal["succeeded", "failed"]
+    summary: str = ""
+    complexity: str = ""
+    report_md: str = ""
+    error: str = ""
+
+
 class FlowEventOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

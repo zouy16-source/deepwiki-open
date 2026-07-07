@@ -34,6 +34,30 @@ class Requirement(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class AnalysisRun(Base):
+    """可行性分析执行记录（FR-ANA，W5 对接）。
+
+    任务在 api 服务执行（task_id 为其任务号）；终态经 /internal/analysis/callback
+    回写本表，succeeded 时驱动 analysis_done 流转并绑定 artifact analysis/<run_id>。
+    """
+
+    __tablename__ = "analysis_run"
+
+    id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
+    requirement_id: Mapped[int] = mapped_column(
+        PK, ForeignKey("requirement.id"), index=True
+    )
+    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="queued")  # queued/running/succeeded/failed
+    summary: Mapped[str] = mapped_column(Text, default="")
+    complexity: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    report_md: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class Review(Base):
     """评审单（FR-REV-01/02）：发起时驱动 start_review 流转，结论驱动 approve/reject。
 

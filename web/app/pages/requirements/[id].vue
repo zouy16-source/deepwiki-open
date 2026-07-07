@@ -128,6 +128,9 @@ const timeline = computed(() => [...(events.value || [])].reverse())
           <p v-else class="text-sm text-muted">（未填写）</p>
         </UCard>
 
+        <!-- AI 可行性分析（FR-ANA，W5） -->
+        <RequirementAnalysis :requirement="req" @changed="onReviewChanged" />
+
         <!-- 评审（FR-REV-01/02） -->
         <RequirementReviews :requirement="req" @changed="onReviewChanged" />
 

@@ -40,6 +40,10 @@ app.add_middleware(
 from api.mcp_server import router as mcp_router
 app.include_router(mcp_router)
 
+# 可行性分析任务（AI研发管理平台 W5）：requirement 服务创建任务，完成后回调。
+from api.analysis_jobs import router as analysis_router
+app.include_router(analysis_router)
+
 # Helper function to get adalflow root path
 def get_adalflow_default_root_path():
     return os.path.expanduser(os.path.join("~", ".adalflow"))

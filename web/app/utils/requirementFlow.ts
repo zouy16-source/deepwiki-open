@@ -38,7 +38,8 @@ export interface FlowAction {
 // (当前状态) -> 可执行动作。analysis_done 一期为手动按钮，W5 接入分析任务后由回调触发。
 export const TRANSITIONS: Record<string, FlowAction[]> = {
   draft: [{ action: 'submit', label: '提交分析', to: 'pending_analysis', color: 'primary' }],
-  pending_analysis: [{ action: 'analysis_done', label: '标记分析完成', to: 'analyzed', color: 'info' }],
+  // 正常路径由 AI 分析任务回调驱动（RequirementAnalysis 组件）；此按钮是 AI 不可用时的人工降级（NFR-02）
+  pending_analysis: [{ action: 'analysis_done', label: '手动标记分析完成（降级）', to: 'analyzed', color: 'neutral' }],
   analyzed: [
     { action: 'start_review', label: '发起评审', to: 'in_review', color: 'primary' },
     { action: 'reanalyze', label: '重新分析', to: 'pending_analysis', color: 'neutral' },

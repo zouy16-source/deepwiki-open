@@ -56,6 +56,9 @@ services:
       DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-devroot}@mysql:3306/requirement_db
       DB_AUTO_CREATE: "true"   # dev only; production runs alembic migrations
       INTERNAL_JWT_SECRET: ${INTERNAL_JWT_SECRET:-}
+      # 可行性分析任务在 api 服务（deepwiki）执行，完成后回调本服务
+      ANALYSIS_BASE_URL: http://deepwiki:8001
+      CALLBACK_BASE_URL: http://requirement:8002
     depends_on:
       mysql:
         condition: service_healthy

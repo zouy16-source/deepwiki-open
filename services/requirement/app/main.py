@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from .config import settings
 from .db import Base, engine
-from .routers import requirements, reviews
+from .routers import analysis, requirements, reviews
 
 
 @asynccontextmanager
@@ -24,3 +24,6 @@ def health():
 
 app.include_router(requirements.router, prefix="/api/requirements", tags=["requirements"])
 app.include_router(reviews.router, prefix="/api", tags=["reviews"])
+# 分析发起/查询走 /api/**（经 BFF），回调走 /internal/**（服务间直连，不经 BFF）
+app.include_router(analysis.router, prefix="/api", tags=["analysis"])
+app.include_router(analysis.internal_router, tags=["analysis-internal"])
