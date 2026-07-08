@@ -53,6 +53,9 @@ class Project(Base):
     code: Mapped[str] = mapped_column(String(64), unique=True)
     name: Mapped[str] = mapped_column(String(128))
     description: Mapped[str] = mapped_column(Text, default="")
+    # 绑定的代码库（FR-KB-01/FR-ADM-02）：本地 clone 目录名 JSON 数组（如 ["eopl_galaxy-waybill"]），
+    # 可行性分析 Agent 据此确定检索范围
+    repos: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

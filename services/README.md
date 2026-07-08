@@ -14,6 +14,7 @@
 - 登录链路：BFF `/api/auth/login` → identity `/internal/auth/verify`（LDAP search-then-bind，**唯一认证源，无本地回退**）→ BFF 写 httpOnly 会话 cookie；`INTERNAL_JWT_SECRET` 为空 = 本地开发免鉴权
 - 平台 API 代理：BFF `/api/{requirements,users,projects,audit-logs}/**` 同路径转发至对应服务（`web/server/utils/platformProxy.ts`），转发时校验会话并以会话用户为 sub 即签短时内部 JWT；会话 cookie 不透传给内部服务
 - 每服务独立 MySQL schema 与 alembic 迁移，**禁止跨库 join**，跨域数据经 API 聚合
+- **schema 变更一律走 alembic**（init 迁移已就位，现网库已 stamp 到 head）：改 models → `alembic revision --autogenerate -m "..."` → 审查生成的迁移（新增 NOT NULL 列必须带 server_default 或回填）→ `alembic upgrade head`；`DB_AUTO_CREATE` 仅用于本地 SQLite 快速起步，它不会 ALTER 已存在的表
 - requirement 调用 api 服务发起分析任务，结果经事件/回调回写，避免双向强耦合
 - 新服务复制 requirement 的目录结构与约定（config/db/auth/models/schemas/routers + alembic）
 

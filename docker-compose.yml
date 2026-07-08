@@ -13,6 +13,8 @@ services:
     environment:
       - PORT=${PORT:-8001}
       - SERVER_BASE_URL=http://localhost:${PORT:-8001}
+      # RAG 查询向量化走 DashScope 原生端点；与 compatible-mode 的 OPENAI_API_KEY 是同一把 key
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-${OPENAI_API_KEY:-}}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FILE_PATH=${LOG_FILE_PATH:-api/logs/application.log}
     volumes:
@@ -59,6 +61,8 @@ services:
       # 可行性分析任务在 api 服务（deepwiki）执行，完成后回调本服务
       ANALYSIS_BASE_URL: http://deepwiki:8001
       CALLBACK_BASE_URL: http://requirement:8002
+      # 发起分析时向 identity 查项目空间绑定的代码库
+      IDENTITY_BASE_URL: http://identity:8003
     depends_on:
       mysql:
         condition: service_healthy

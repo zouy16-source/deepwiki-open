@@ -2,6 +2,7 @@
   "embedder": {
     "client_class": "OpenAIClient",
     "batch_size": 10,
+    "concurrency": 8,
     "model_kwargs": {
       "model": "text-embedding-v4",
       "dimensions": 1024,

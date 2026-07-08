@@ -53,6 +53,18 @@ async def run_repo_agent(llm, model: str, root: str, repo_label: str, layer: str
         {"role": "user", "content": "开始调查。已知线索（来自术语表/接口清单/精确检索，可直接引用其中行号）：\n"
                                     + (seed or "（无——从 grep 开始）")},
     ]
+    return await run_tool_loop(llm, model, root, messages, max_iters=max_iters,
+                               deadline_s=deadline_s, on_step=on_step, log_label=repo_label)
+
+
+async def run_tool_loop(llm, model: str, root: str, messages: list,
+                        max_iters: int = MAX_ITERS, deadline_s: int = DEADLINE_S,
+                        on_step=None, log_label: str = ""):
+    """通用 grep/read_file/list_dir 工具循环（字段追溯与可行性分析共用）。
+
+    调用方自备 messages（system+user）；循环到模型不再调用工具或预算用尽，
+    返回 (最终文本, 工具调用轨迹)。
+    """
     steps = []
     started = time.monotonic()
     for it in range(max_iters):
@@ -64,7 +76,7 @@ async def run_repo_agent(llm, model: str, root: str, repo_label: str, layer: str
                 model=model, messages=messages, temperature=0.2,
                 **({} if timed_out else {"tools": TOOLS_SPEC}))
         except Exception as e:  # noqa: BLE001
-            logger.error(f"trace agent LLM 调用失败 [{repo_label}] iter={it}: {e}")
+            logger.error(f"tool-loop LLM 调用失败 [{log_label}] iter={it}: {e}")
             return f"（调查中断：{e}）", steps
         msg = resp.choices[0].message
         if not msg.tool_calls:

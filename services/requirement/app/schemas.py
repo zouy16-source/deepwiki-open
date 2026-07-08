@@ -13,6 +13,7 @@ class RequirementCreate(BaseModel):
     parent_id: int | None = None
     priority: str = Field(default="P1", pattern="^P[0-2]$")
     expected_online_date: date | None = None
+    source_context: str = ""  # 对话式创建时的对话快照
 
 
 class RequirementOut(BaseModel):
@@ -28,9 +29,16 @@ class RequirementOut(BaseModel):
     priority: str
     complexity: str | None
     expected_online_date: date | None
+    source_context: str
     creator: str
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("source_context", mode="before")
+    @classmethod
+    def _none_to_empty(cls, v):
+        # 列为后加（ALTER TABLE），存量行为 NULL；序列化时统一坍缩为空串
+        return v or ""
 
 
 class TransitionIn(BaseModel):

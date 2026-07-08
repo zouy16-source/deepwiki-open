@@ -44,6 +44,10 @@ app.include_router(mcp_router)
 from api.analysis_jobs import router as analysis_router
 app.include_router(analysis_router)
 
+# 对话式创建需求的 agentic 聊天通道（grep 工具循环 + 引用核验，SSE）。
+from api.agentic_chat import router as agentic_chat_router
+app.include_router(agentic_chat_router)
+
 # Helper function to get adalflow root path
 def get_adalflow_default_root_path():
     return os.path.expanduser(os.path.join("~", ".adalflow"))

@@ -29,6 +29,22 @@ internal_router = APIRouter()   # /internal/**：仅服务间直连（api 服务
 ACTIVE = ("queued", "running")
 
 
+def _project_repos(project_id: int) -> list[str]:
+    """项目空间绑定的代码库（identity FR-ADM-02）。取不到不阻塞——分析会降级为纯文本模式。"""
+    try:
+        resp = httpx.get(
+            f"{settings.identity_base_url.rstrip('/')}/api/projects/{project_id}",
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            repos = resp.json().get("repos")
+            return repos if isinstance(repos, list) else []
+        logger.warning("fetch project %s repos -> %s", project_id, resp.status_code)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("fetch project %s repos failed: %s", project_id, e)
+    return []
+
+
 @router.post("/requirements/{req_id}/analysis", response_model=AnalysisRunOut, status_code=202)
 def start_analysis(
     req_id: int,
@@ -55,6 +71,7 @@ def start_analysis(
     payload = {
         "run_id": run.id,
         "callback_url": f"{settings.callback_base_url.rstrip('/')}/internal/analysis/callback",
+        "repos": _project_repos(req.project_id),
         "requirement": {
             "id": req.id,
             "title": req.title,
@@ -64,6 +81,7 @@ def start_analysis(
             "project_id": req.project_id,
             "expected_online_date": req.expected_online_date.isoformat()
             if req.expected_online_date else None,
+            "source_context": (req.source_context or "")[:8000],
         },
     }
     try:

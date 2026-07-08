@@ -30,6 +30,9 @@ def create_requirement(
             to_status=req.status,
             action="create",
             operator=subject,
+            # 对话式创建：把对话快照绑定为需求的第一个 AI 产物
+            artifact_type="chat" if body.source_context.strip() else None,
+            artifact_ref=f"chat/req-{req.id}" if body.source_context.strip() else None,
         )
     )
     db.commit()

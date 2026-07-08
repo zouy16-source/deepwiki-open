@@ -42,7 +42,10 @@ const { data: reqs, pending, error } = useFetch<Requirement[]>('/api/requirement
         <USelect v-model="status" :items="statusItems" class="w-36" />
         <USelect v-model="projectId" :items="projectItems" class="w-48" />
         <span v-if="pending" class="text-xs text-muted">加载中…</span>
-        <UButton icon="i-lucide-plus" class="ml-auto" to="/requirements/new">
+        <UButton icon="i-lucide-messages-square" class="ml-auto" to="/requirements/chat">
+          对话创建需求
+        </UButton>
+        <UButton icon="i-lucide-plus" variant="soft" to="/requirements/new">
           新建需求
         </UButton>
       </div>

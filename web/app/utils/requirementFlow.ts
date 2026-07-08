@@ -75,6 +75,7 @@ export const ARTIFACT_LABELS: Record<string, string> = {
   mr: '代码变更',
   test_result: '测试结果',
   review: '评审单',
+  chat: '对话记录',
 }
 
 // 评审结论（FR-REV-02）。approved/conditional 驱动 approve 流转，rejected 驱动 reject。

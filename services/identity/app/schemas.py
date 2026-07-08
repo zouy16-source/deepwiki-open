@@ -1,6 +1,7 @@
+import json
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class UserCreate(BaseModel):
@@ -42,6 +43,13 @@ class ProjectCreate(BaseModel):
     code: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=128)
     description: str = ""
+    repos: list[str] = []
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    repos: list[str] | None = None  # 绑定/解绑代码库（本地 clone 目录名）
 
 
 class ProjectOut(BaseModel):
@@ -51,7 +59,19 @@ class ProjectOut(BaseModel):
     code: str
     name: str
     description: str
+    repos: list[str]
     created_at: datetime
+
+    @field_validator("repos", mode="before")
+    @classmethod
+    def _parse_repos(cls, v):
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                return parsed if isinstance(parsed, list) else []
+            except json.JSONDecodeError:
+                return []
+        return v
 
 
 class AuditLogCreate(BaseModel):

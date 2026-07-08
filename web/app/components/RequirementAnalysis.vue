@@ -137,7 +137,7 @@ watch(latest, (l) => {
 
         <div
           v-if="expandedReport === run.id && run.report_md"
-          class="bg-elevated/50 rounded p-4 max-h-[32rem] overflow-y-auto"
+          class="report-viewer bg-elevated/50 rounded p-4 max-h-[32rem] overflow-y-auto overflow-x-hidden"
         >
           <Markdown :content="run.report_md" class="text-sm" />
         </div>
@@ -151,3 +151,32 @@ watch(latest, (l) => {
     </p>
   </UCard>
 </template>
+
+<style scoped>
+/* 报告里的长文件路径引用：允许任意断行，代码块/表格自身横滚（与对话气泡同一套防溢出策略） */
+.report-viewer {
+  overflow-wrap: anywhere;
+}
+
+.report-viewer :deep(code) {
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.report-viewer :deep(pre) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.report-viewer :deep(pre code) {
+  white-space: pre;
+  word-break: normal;
+}
+
+.report-viewer :deep(table) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+</style>

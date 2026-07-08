@@ -29,6 +29,8 @@ class Requirement(Base):
     priority: Mapped[str] = mapped_column(String(8), default="P1")
     complexity: Mapped[str | None] = mapped_column(String(8), nullable=True)  # S/M/L/XL
     expected_online_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # 对话式创建时的对话快照（产品×代码库 AI）；作为可行性分析 agent 的种子线索
+    source_context: Mapped[str] = mapped_column(Text, default="")
     creator: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

@@ -1,10 +1,12 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..models import Project
-from ..schemas import ProjectCreate, ProjectOut
+from ..schemas import ProjectCreate, ProjectOut, ProjectUpdate
 
 router = APIRouter()
 
@@ -13,8 +15,26 @@ router = APIRouter()
 def create_project(body: ProjectCreate, db: Session = Depends(get_db)):
     if db.scalar(select(Project).where(Project.code == body.code)):
         raise HTTPException(409, f"project code '{body.code}' already exists")
-    project = Project(**body.model_dump())
+    data = body.model_dump()
+    data["repos"] = json.dumps(data.get("repos") or [], ensure_ascii=False)
+    project = Project(**data)
     db.add(project)
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+@router.patch("/{project_id}", response_model=ProjectOut)
+def update_project(project_id: int, body: ProjectUpdate, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "project not found")
+    if body.name is not None:
+        project.name = body.name
+    if body.description is not None:
+        project.description = body.description
+    if body.repos is not None:
+        project.repos = json.dumps(body.repos, ensure_ascii=False)
     db.commit()
     db.refresh(project)
     return project
