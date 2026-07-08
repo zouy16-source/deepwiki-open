@@ -7,6 +7,7 @@ const props = defineProps<{ requirement: Requirement }>()
 const emit = defineEmits<{ changed: [] }>()
 
 const toast = useToast()
+const { displayName } = usePlatformUsers()
 
 const { data: runs, refresh: refreshRuns } = useFetch<AnalysisRun[]>(
   () => `/api/requirements/${props.requirement.id}/analysis`,
@@ -108,7 +109,7 @@ watch(latest, (l) => {
           />
           <UBadge v-if="run.complexity" :label="`复杂度 ${run.complexity}`" color="info" variant="outline" size="sm" />
           <span class="text-xs text-muted">
-            {{ run.created_by }} 发起于 {{ fmtTime(run.created_at) }}
+            <span :title="run.created_by">{{ displayName(run.created_by) }}</span> 发起于 {{ fmtTime(run.created_at) }}
             <template v-if="run.finished_at"> · 完成于 {{ fmtTime(run.finished_at) }}</template>
           </span>
           <UButton

@@ -8,6 +8,9 @@ import tiktoken
 import logging
 import base64
 import glob
+import time
+import random
+import threading
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
@@ -467,8 +470,49 @@ def read_all_documents(path: str, embedder_type: str = None, is_ollama_embedder:
     logger.info(f"Found {len(documents)} documents")
     return documents
 
+class _StartRateLimiter:
+    """Spaces request *start* times evenly to ``rpm`` requests/minute.
+
+    DashScope enforces limits per-second as well as per-minute ("even within the
+    per-minute limit, a burst inside one second can trigger throttling"). Bounded
+    concurrency alone still lets N requests fire in the same instant. This limiter
+    hands each caller a slot ``60/rpm`` seconds after the previous one, so the
+    aggregate start rate is smooth regardless of concurrency. rpm<=0 disables it.
+    """
+
+    def __init__(self, rpm: float):
+        self.min_interval = 60.0 / rpm if rpm and rpm > 0 else 0.0
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def acquire(self):
+        if self.min_interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            start_at = max(now, self._next)
+            self._next = start_at + self.min_interval
+        delay = start_at - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+
+
+def _is_rate_limit_error(err: str) -> bool:
+    """True if an embedder error string looks like provider throttling (retryable).
+
+    DashScope reuses the ``insufficient_quota`` / "exceeded your current quota"
+    wording for *per-minute rate limiting*, not just billing exhaustion, so treat
+    those as retryable throttling rather than a hard stop.
+    """
+    if not err:
+        return False
+    e = err.lower()
+    return any(s in e for s in ("429", "rate limit", "ratelimit", "too many requests",
+                                "throttl", "quota", "flow control", "limit_requests"))
+
+
 class ConcurrentToEmbeddings(adal.DataComponent):
-    r"""Concurrent drop-in replacement for adalflow's ``ToEmbeddings``.
+    r"""Rate-limited concurrent drop-in replacement for adalflow's ``ToEmbeddings``.
 
     adalflow's ``ToEmbeddings`` embeds batches strictly sequentially (a plain
     for-loop over ``BatchEmbedder``), so on a large repo the indexing wall-clock is
@@ -476,47 +520,116 @@ class ConcurrentToEmbeddings(adal.DataComponent):
     all spent blocked on network. Providers like DashScope also cap inputs at 10 per
     request, so ``batch_size`` can't be raised to compensate.
 
-    This version fires the per-batch embed calls through a thread pool (the calls are
-    blocking HTTP, so threads give real concurrency) while preserving input order and
-    the exact vector-assignment semantics. On a failed batch the affected documents
-    are left without a vector and get dropped downstream by RAG's embedding filter,
-    matching prior lenient behaviour rather than aborting the whole index.
+    This version pipelines the per-batch embed calls through a thread pool while
+    respecting the provider's rate limit:
+
+    * ``_StartRateLimiter`` smooths request start times to ``rpm``/min so bounded
+      concurrency never bursts past the per-second limit (the failure mode that
+      returns 429 "exceeded your current quota" from DashScope).
+    * **Token-aware batching**: DashScope also rejects a request whose total input
+      exceeds ~33,000 tokens with a 400 ("Range of input length should be [1, 33000]").
+      A fixed count of 10 dense-code chunks can breach that, so batches are packed by
+      a token budget (``max_input_tokens``) as well as ``batch_size``.
+    * Only **rate-limit** errors are retried (with exponential backoff + jitter) —
+      never silently dropped; a 429 costs latency, not coverage. Permanent errors
+      (e.g. 400 invalid input) fail fast instead of burning ~retries*provider_retries
+      wasted calls. A batch left without vectors is filtered downstream by RAG.
+
+    Order and the exact vector-assignment semantics of ``ToEmbeddings`` are kept.
     """
 
-    def __init__(self, embedder, batch_size: int = 50, concurrency: int = 8) -> None:
+    def __init__(self, embedder, batch_size: int = 50, concurrency: int = 4,
+                 rpm: float = 120, max_retries: int = 6, max_input_tokens: int = 30000,
+                 embedder_type: str = None) -> None:
         super().__init__(batch_size=batch_size)
         self.embedder = embedder
         self.batch_size = batch_size
         self.concurrency = max(1, concurrency)
+        self.rpm = rpm
+        self.max_retries = max(0, max_retries)
+        self.max_input_tokens = max_input_tokens
+        self.embedder_type = embedder_type
+
+    def _fit(self, text):
+        """Truncate a single chunk that alone exceeds the per-request token budget.
+
+        The splitter can emit a lone huge chunk from space-less content (a big JSON/
+        SQL/base64 blob), which would 400 the request. Truncating the *embedding
+        input* (the stored chunk keeps its full text) yields partial coverage instead
+        of dropping it entirely.
+        """
+        n = count_tokens(text, self.embedder_type)
+        if n <= self.max_input_tokens:
+            return text
+        keep = int(len(text) * self.max_input_tokens / n * 0.9)  # 10% margin
+        logger.warning(f"Truncating oversized chunk for embedding: {n} tokens "
+                       f"-> ~{self.max_input_tokens} (kept {keep}/{len(text)} chars)")
+        return text[:keep]
+
+    def _build_batches(self, texts):
+        """Pack contiguous chunks into batches bounded by both count and token budget.
+
+        Returns a list of (start_offset, texts) with each batch <= batch_size items
+        and <= max_input_tokens total.
+        """
+        batches = []
+        i, n = 0, len(texts)
+        while i < n:
+            j, total = i, 0
+            while j < n and (j - i) < self.batch_size:
+                t = count_tokens(texts[j], self.embedder_type)
+                if j > i and total + t > self.max_input_tokens:
+                    break
+                total += t
+                j += 1
+            batches.append((i, texts[i:j]))
+            i = j
+        return batches
 
     def __call__(self, input):
         output = deepcopy(input)
-        texts = [chunk.text for chunk in output]
-        # (start_offset, batch_texts) so results can be reassembled out of order.
-        batches = [(i, texts[i:i + self.batch_size]) for i in range(0, len(texts), self.batch_size)]
+        # Embedding input only — output[i].text keeps its full, untruncated content.
+        texts = [self._fit(chunk.text) for chunk in output]
+        # (start_offset, batch_texts) — contiguous, so results reassemble by offset.
+        batches = self._build_batches(texts)
+        limiter = _StartRateLimiter(self.rpm)
 
         def _embed(offset, batch):
-            try:
-                return offset, self.embedder.call(input=batch, model_kwargs={})
-            except Exception as e:  # noqa: BLE001 — one bad batch shouldn't kill the index
-                logger.warning(f"Embedding batch at offset {offset} failed: {e}")
-                return offset, None
+            for attempt in range(self.max_retries + 1):
+                limiter.acquire()
+                try:
+                    out = self.embedder.call(input=batch, model_kwargs={})
+                    err = getattr(out, "error", None)
+                except Exception as e:  # noqa: BLE001
+                    out, err = None, str(e)
+                if out is not None and not err:
+                    return offset, out
+                # Only throttling is worth retrying; permanent errors (400 etc.) won't
+                # fix themselves — fail fast rather than burn the full retry budget.
+                if not _is_rate_limit_error(err) or attempt >= self.max_retries:
+                    logger.warning(f"Embedding batch at offset {offset} failed"
+                                   f"{' after ' + str(attempt + 1) + ' attempts' if attempt else ''}: {err}")
+                    return offset, None
+                sleep = min(2.0 * (2 ** attempt), 30.0) + random.uniform(0, 1.5)
+                logger.info(f"Rate limited at offset {offset}; backing off {sleep:.1f}s "
+                            f"(attempt {attempt + 1}/{self.max_retries})")
+                time.sleep(sleep)
+            return offset, None
 
         with ThreadPoolExecutor(max_workers=self.concurrency) as pool:
             futures = [pool.submit(_embed, off, batch) for off, batch in batches]
             for fut in tqdm(as_completed(futures), total=len(futures),
-                            desc=f"Batch embedding documents (x{self.concurrency})"):
+                            desc=f"Batch embedding documents (x{self.concurrency}, {self.rpm}rpm)"):
                 offset, batch_output = fut.result()
                 if batch_output is None or getattr(batch_output, "error", None):
-                    if batch_output is not None:
-                        logger.warning(f"Embedding batch at offset {offset} returned error: {batch_output.error}")
                     continue
                 for idx, embedding in enumerate(batch_output.data):
                     output[offset + idx].vector = embedding.embedding
         return output
 
     def _extra_repr(self) -> str:
-        return f"batch_size={self.batch_size}, concurrency={self.concurrency}"
+        return (f"batch_size={self.batch_size}, concurrency={self.concurrency}, "
+                f"rpm={self.rpm}, max_input_tokens={self.max_input_tokens}")
 
 
 def prepare_data_pipeline(embedder_type: str = None, is_ollama_embedder: bool = None):
@@ -552,14 +665,20 @@ def prepare_data_pipeline(embedder_type: str = None, is_ollama_embedder: bool = 
         # Use Ollama document processor for single-document processing
         embedder_transformer = OllamaDocumentProcessor(embedder=embedder)
     else:
-        # Use concurrent batch processing for OpenAI/Google/Bedrock embedders.
-        # `concurrency` bounds in-flight embed requests; providers like DashScope
-        # cap batch_size at 10, so concurrency (not a bigger batch) is what cuts
-        # indexing wall-clock. Tune `concurrency` in embedder.json per rate limits.
+        # Use rate-limited concurrent batch processing for OpenAI/Google/Bedrock.
+        # Providers like DashScope cap batch_size at 10, so concurrency (not a bigger
+        # batch) is what cuts indexing wall-clock — but they also throttle per-minute
+        # AND per-second, so `rpm` smooths the start rate and 429s are retried, not
+        # dropped. Tune `concurrency`/`rpm` in embedder.json to your account's limit.
         batch_size = embedder_config.get("batch_size", 500)
-        concurrency = embedder_config.get("concurrency", 8)
+        concurrency = embedder_config.get("concurrency", 4)
+        rpm = embedder_config.get("rpm", 120)
+        max_retries = embedder_config.get("max_retries", 6)
+        max_input_tokens = embedder_config.get("max_input_tokens", 30000)
         embedder_transformer = ConcurrentToEmbeddings(
-            embedder=embedder, batch_size=batch_size, concurrency=concurrency
+            embedder=embedder, batch_size=batch_size, concurrency=concurrency,
+            rpm=rpm, max_retries=max_retries, max_input_tokens=max_input_tokens,
+            embedder_type=embedder_type,
         )
 
     data_transformer = adal.Sequential(

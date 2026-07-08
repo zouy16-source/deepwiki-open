@@ -37,6 +37,30 @@ const input = ref('')
 const chatting = ref(false)
 const chatBox = ref<HTMLElement | null>(null)
 
+// ---- 分栏拖拽（对话 / 草稿 宽度可调，记忆到 localStorage）----
+const chatWidth = ref(50) // 左栏宽度百分比
+const splitEl = ref<HTMLElement | null>(null)
+onMounted(() => {
+  const saved = Number(localStorage.getItem('reqchat-split'))
+  if (saved >= 25 && saved <= 75) chatWidth.value = saved
+})
+function startDrag(e: PointerEvent) {
+  e.preventDefault()
+  const rect = splitEl.value?.getBoundingClientRect()
+  if (!rect) return
+  const move = (ev: PointerEvent) => {
+    const pct = ((ev.clientX - rect.left) / rect.width) * 100
+    chatWidth.value = Math.min(75, Math.max(25, pct))
+  }
+  const up = () => {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', up)
+    localStorage.setItem('reqchat-split', String(Math.round(chatWidth.value)))
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', up)
+}
+
 function scrollChat() {
   nextTick(() => chatBox.value?.scrollTo({ top: chatBox.value.scrollHeight }))
 }
@@ -186,9 +210,9 @@ async function createRequirement() {
       />
     </div>
 
-    <div class="flex-1 grid grid-cols-1 lg:grid-cols-2 min-h-0">
-      <!-- 左：对话 -->
-      <div class="flex flex-col min-h-0 border-r border-default">
+    <div ref="splitEl" class="flex-1 flex flex-col lg:flex-row min-h-0">
+      <!-- 左：对话（lg 起宽度可拖拽调整） -->
+      <div class="chat-pane flex flex-col min-h-0" :style="{ '--chat-w': chatWidth + '%' }">
         <div ref="chatBox" class="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4">
           <div v-if="!messages.length" class="text-center text-muted pt-16 space-y-2">
             <UIcon name="i-lucide-messages-square" class="size-10 opacity-50" />
@@ -210,37 +234,53 @@ async function createRequirement() {
                   </template>
                 </p>
               </template>
-              <div v-else-if="m.role === 'assistant'" class="space-y-1 text-muted">
-                <span class="inline-flex items-center gap-1.5">
-                  <UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />
-                  {{ m.steps?.length ? '正在检索代码…' : '思考中…' }}
-                </span>
-                <div v-if="m.steps?.length" class="text-xs font-mono space-y-0.5 max-h-32 overflow-y-auto">
-                  <p v-for="(s, si) in m.steps" :key="si" class="truncate">
-                    <span class="text-primary">{{ s.tool }}</span> {{ s.args }} <span class="text-dimmed">→ {{ s.result }}</span>
-                  </p>
-                </div>
-              </div>
+              <span v-else-if="m.role === 'assistant'" class="inline-flex items-center gap-1.5 text-muted">
+                <UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />
+                {{ m.steps?.length ? '正在检索代码…' : '思考中…' }}
+              </span>
               <span v-else class="whitespace-pre-wrap">{{ m.content }}</span>
             </div>
           </div>
         </div>
-        <div class="p-3 border-t border-default flex gap-2">
-          <UTextarea
-            v-model="input"
-            :rows="2"
-            autoresize
-            :maxrows="5"
-            placeholder="询问代码逻辑、业务可行性…（Enter 发送，Shift+Enter 换行）"
-            class="flex-1"
-            @keydown.enter.exact.prevent="send"
-          />
-          <UButton icon="i-lucide-send" :loading="chatting" :disabled="!input.trim()" @click="send">对话</UButton>
+        <div class="p-3 border-t border-default">
+          <div class="rounded-xl border border-default bg-elevated/40 focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/30 transition">
+            <UTextarea
+              v-model="input"
+              :rows="2"
+              autoresize
+              :maxrows="8"
+              variant="none"
+              placeholder="询问代码逻辑、业务可行性…"
+              class="w-full"
+              :ui="{ base: 'px-3 pt-2.5 pb-0 resize-none' }"
+              @keydown.enter.exact.prevent="send"
+            />
+            <div class="flex items-center gap-2 px-3 pb-2 pt-1">
+              <span class="text-xs text-dimmed hidden sm:inline">Enter 发送 · Shift+Enter 换行</span>
+              <UButton
+                class="ml-auto"
+                size="sm"
+                icon="i-lucide-send"
+                :loading="chatting"
+                :disabled="!input.trim() || !repoName"
+                @click="send"
+              >
+                发送
+              </UButton>
+            </div>
+          </div>
         </div>
       </div>
 
+      <!-- 分栏拖拽把手（移动端隐藏） -->
+      <div
+        class="hidden lg:block w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary/60 active:bg-primary transition-colors"
+        title="拖动调整宽度"
+        @pointerdown="startDrag"
+      />
+
       <!-- 右：需求草稿实时预览 -->
-      <div class="flex flex-col min-h-0">
+      <div class="flex-1 min-w-0 flex flex-col min-h-0 border-t lg:border-t-0 border-default">
         <div class="flex items-center gap-2 p-3 border-b border-default">
           <UIcon name="i-lucide-file-pen-line" class="size-4 text-primary" />
           <span class="text-sm font-medium text-highlighted">需求草稿</span>
@@ -321,6 +361,15 @@ async function createRequirement() {
 </template>
 
 <style scoped>
+/* 分栏：lg 起左栏宽度由拖拽把手控制（--chat-w），移动端上下堆叠占满 */
+@media (min-width: 1024px) {
+  .chat-pane {
+    flex: 0 0 var(--chat-w, 50%);
+    min-width: 25%;
+    max-width: 75%;
+  }
+}
+
 /* 长路径/标识符等无断点字符串：允许任意处断行，杜绝气泡横向溢出 */
 .chat-bubble {
   overflow-wrap: anywhere;

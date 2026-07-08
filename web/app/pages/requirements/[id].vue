@@ -7,6 +7,7 @@ definePageMeta({ layout: 'home' })
 
 const route = useRoute()
 const toast = useToast()
+const { displayName } = usePlatformUsers()
 const reqId = computed(() => Number(route.params.id))
 
 const { data: req, refresh: refreshReq, error } = useFetch<Requirement>(
@@ -113,7 +114,7 @@ const timeline = computed(() => [...(events.value || [])].reverse())
             <UBadge :label="req.priority" :color="(PRIORITY_COLORS[req.priority] as any)" variant="outline" />
             <UBadge v-if="req.complexity" :label="`复杂度 ${req.complexity}`" color="info" variant="outline" />
             <span class="text-xs text-muted ml-1">
-              {{ req.creator }} 创建于 {{ fmtTime(req.created_at) }} · 更新于 {{ fmtTime(req.updated_at) }}
+              <span :title="req.creator">{{ displayName(req.creator) }}</span> 创建于 {{ fmtTime(req.created_at) }} · 更新于 {{ fmtTime(req.updated_at) }}
               <template v-if="req.expected_online_date"> · 期望上线 {{ req.expected_online_date }}</template>
             </span>
           </div>
@@ -176,7 +177,7 @@ const timeline = computed(() => [...(events.value || [])].reverse())
               </div>
               <div class="min-w-0 flex-1 text-sm">
                 <div class="flex flex-wrap items-center gap-2">
-                  <span class="font-medium text-highlighted">{{ e.operator }}</span>
+                  <span class="font-medium text-highlighted" :title="e.operator">{{ displayName(e.operator) }}</span>
                   <template v-if="e.from_status">
                     <UBadge :label="STATUS_META[e.from_status]?.label || e.from_status" color="neutral" variant="outline" size="sm" />
                     <UIcon name="i-lucide-arrow-right" class="size-3 text-dimmed" />

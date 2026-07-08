@@ -192,19 +192,26 @@ function normAnchor(s: string): string {
   try { t = decodeURIComponent(t) } catch { /* keep raw */ }
   return t.replace(/^#/, '').replace(/[\s\-_.、·，,:：（）()]/g, '').toLowerCase()
 }
+// Cross-page wiki links are "[标题](#标题)" (page-title anchors). This SPA shows ONE
+// page at a time, so we intercept clicks and resolve the fragment to a page → selectPage.
+// IMPORTANT: markdown links render through Nuxt UI ProseA → ULink → NuxtLink, which may
+// rewrite a bare "#标题" into a full path ("/owner/repo#标题"). So we DON'T gate on
+// href.startsWith('#') — we take the fragment after '#' regardless of the path part, and
+// only skip links that are external (have a URL scheme) or have no hash at all.
 function onContentClick(e: MouseEvent) {
   const a = (e.target as HTMLElement)?.closest?.('a')
   if (!a) return
   const href = a.getAttribute('href') || ''
-  if (href && !href.startsWith('#')) return
-  const frag = normAnchor(href)
-  if (!frag && !href) {
-    // 空链接 [标题]()：按文字解析成页面跳转；解析不到也吞掉（避免刷新页面）
-    e.preventDefault()
-  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return // external URL (http:, mailto:, …) — navigate
+  const hashIdx = href.indexOf('#')
+  // fragment after '#'; empty/hashless hrefs fall back to link-text resolution below
+  const frag = hashIdx >= 0 ? normAnchor(href.slice(hashIdx)) : ''
+
   const pages = wikiStructure.value?.pages || []
-  let hit = pages.find((p) => normAnchor(p.title) === frag || normAnchor(p.id) === frag)
-  if (!hit) {
+  let hit = frag
+    ? pages.find((p) => normAnchor(p.title) === frag || normAnchor(p.id) === frag)
+    : undefined
+  if (!hit && frag) {
     // partial match (LLM sometimes shortens the title) — only when unambiguous
     const cands = pages.filter((p) => {
       const n = normAnchor(p.title)
@@ -226,17 +233,20 @@ function onContentClick(e: MouseEvent) {
       }
     }
   }
+  if (import.meta.dev) console.log('[wiki-link]', { href, frag, text: a.textContent, pages: pages.length, hit: hit?.id })
   if (hit) {
     e.preventDefault()
     selectPage(hit.id)
     return
   }
-  const el = document.getElementById(href.slice(1)) || document.getElementById(normAnchor(href))
+  // fall back to a real in-page heading anchor if one exists
+  const rawHash = hashIdx >= 0 ? href.slice(hashIdx + 1) : ''
+  const el = (rawHash && document.getElementById(rawHash)) || (frag && document.getElementById(frag))
   if (el) {
     e.preventDefault()
     el.scrollIntoView({ behavior: 'smooth' })
-  } else {
-    e.preventDefault() // dead anchor: swallow instead of polluting the URL hash
+  } else if (hashIdx >= 0) {
+    e.preventDefault() // unresolved in-page anchor — swallow, don't pollute the URL hash
   }
 }
 

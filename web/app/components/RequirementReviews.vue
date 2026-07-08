@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 评审卡片（FR-REV-01/02）：发起评审（自动生成议程、圈选参会人）→ 录入结论驱动流转。
 // start_review / approve / reject 三个状态机动作由本组件收敛，不走详情页通用按钮。
-import type { PlatformUser, Requirement, Review } from '~/types/requirement'
+import type { Requirement, Review } from '~/types/requirement'
 
 const props = defineProps<{ requirement: Requirement }>()
 const emit = defineEmits<{ changed: [] }>()
@@ -26,7 +26,7 @@ const createForm = reactive({
   agenda: '',
 })
 
-const { data: users } = useFetch<PlatformUser[]>('/api/users', { default: () => [] })
+const { users, displayName } = usePlatformUsers()
 const userItems = computed(() =>
   (users.value || [])
     .filter(u => u.is_active)
@@ -128,7 +128,7 @@ const expandedAgenda = ref<number | null>(null)
           />
           <UBadge v-else label="评审中" color="primary" variant="subtle" size="sm" />
           <span class="text-xs text-muted">
-            {{ rv.initiator }} 发起于 {{ fmtTime(rv.created_at) }}
+            <span :title="rv.initiator">{{ displayName(rv.initiator) }}</span> 发起于 {{ fmtTime(rv.created_at) }}
             <template v-if="rv.scheduled_at"> · 会议时间 {{ fmtTime(rv.scheduled_at) }}</template>
           </span>
           <UButton
@@ -145,7 +145,7 @@ const expandedAgenda = ref<number | null>(null)
 
         <div v-if="rv.participants.length" class="flex flex-wrap items-center gap-1.5">
           <UIcon name="i-lucide-users" class="size-3.5 text-dimmed" />
-          <UBadge v-for="p in rv.participants" :key="p" :label="p" color="neutral" variant="outline" size="sm" />
+          <UBadge v-for="p in rv.participants" :key="p" :label="displayName(p)" :title="p" color="neutral" variant="outline" size="sm" />
         </div>
 
         <pre
@@ -154,7 +154,7 @@ const expandedAgenda = ref<number | null>(null)
         >{{ rv.agenda }}</pre>
 
         <p v-if="rv.conclusion" class="text-sm text-muted">
-          <span class="font-medium text-highlighted">{{ rv.concluded_by }}</span>
+          <span class="font-medium text-highlighted" :title="rv.concluded_by || ''">{{ displayName(rv.concluded_by) }}</span>
           于 {{ fmtTime(rv.concluded_at) }} 录入结论
           <template v-if="rv.conclusion_comment">：{{ rv.conclusion_comment }}</template>
         </p>

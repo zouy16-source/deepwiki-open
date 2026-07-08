@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// 需求列表（FR-REQ-01/02 入口）：筛选 + 分页，行点击进详情。
+// 需求列表（FR-REQ-01/02 入口）：筛选 + 分页，行点击进详情。UTable 承载。
+import type { TableColumn, TableRow } from '@nuxt/ui'
 import type { Project, Requirement } from '~/types/requirement'
 
 definePageMeta({ layout: 'home' })
@@ -21,6 +22,8 @@ const projectItems = computed(() => [
 ])
 const projectName = (id: number) => projects.value?.find(p => p.id === id)?.name || `#${id}`
 
+const { displayName } = usePlatformUsers()
+
 watch([status, projectId], () => { offset.value = 0 })
 
 const query = computed(() => ({
@@ -33,6 +36,22 @@ const { data: reqs, pending, error } = useFetch<Requirement[]>('/api/requirement
   query,
   default: () => [],
 })
+
+// 列定义：宽度/响应式隐藏/单行截断经 meta.class 下发到 th、td；单元格内容用 #<col>-cell slots 渲染。
+const columns: TableColumn<Requirement>[] = [
+  { accessorKey: 'id', header: 'ID', meta: { class: { th: 'w-16', td: 'w-16 text-muted truncate' } } },
+  { accessorKey: 'title', header: '标题' },
+  { accessorKey: 'status', header: '状态', meta: { class: { th: 'w-24', td: 'w-24' } } },
+  { accessorKey: 'priority', header: '优先级', meta: { class: { th: 'w-20', td: 'w-20' } } },
+  { accessorKey: 'project_id', header: '项目', meta: { class: { th: 'w-36 hidden md:table-cell', td: 'w-36 hidden md:table-cell text-muted truncate' } } },
+  { accessorKey: 'expected_online_date', header: '期望上线', meta: { class: { th: 'w-28 hidden lg:table-cell', td: 'w-28 hidden lg:table-cell text-muted truncate' } } },
+  { accessorKey: 'creator', header: '创建人', meta: { class: { th: 'w-24 hidden lg:table-cell', td: 'w-24 hidden lg:table-cell text-muted truncate' } } },
+  { accessorKey: 'updated_at', header: '更新时间', meta: { class: { th: 'w-40 hidden sm:table-cell', td: 'w-40 hidden sm:table-cell text-muted truncate' } } },
+]
+
+function onSelect(_e: Event, row: TableRow<Requirement>) {
+  navigateTo(`/requirements/${row.original.id}`)
+}
 </script>
 
 <template>
@@ -59,62 +78,59 @@ const { data: reqs, pending, error } = useFetch<Requirement[]>('/api/requirement
         :description="error.statusMessage || String(error)"
       />
 
-      <div v-else-if="!pending && !reqs?.length" class="py-20 text-center text-muted">
-        <UIcon name="i-lucide-clipboard-list" class="size-10 mx-auto mb-3 opacity-50" />
-        <p>暂无需求{{ status !== 'all' || projectId !== 'all' ? '（当前筛选条件下）' : '' }}</p>
-        <UButton v-if="status === 'all' && projectId === 'all'" variant="link" to="/requirements/new">
-          提交第一条需求
-        </UButton>
-      </div>
+      <div v-else class="reqs-table border border-default rounded-lg overflow-hidden">
+        <UTable
+          :data="reqs"
+          :columns="columns"
+          :loading="pending"
+          :ui="{ tr: 'cursor-pointer', td: 'py-2.5', th: 'py-2' }"
+          @select="onSelect"
+        >
+          <template #id-cell="{ row }">
+            #{{ row.original.id }}
+          </template>
+          <template #title-cell="{ row }">
+            <div class="flex items-center gap-2 min-w-0">
+              <UBadge
+                :label="TYPE_LABELS[row.original.req_type]"
+                :color="row.original.req_type === 'business' ? 'primary' : 'neutral'"
+                variant="outline"
+                size="sm"
+                class="shrink-0"
+              />
+              <span class="truncate font-medium text-highlighted" :title="row.original.title">{{ row.original.title }}</span>
+              <UIcon v-if="row.original.parent_id" name="i-lucide-corner-down-right" class="size-3.5 text-dimmed shrink-0" title="子需求" />
+            </div>
+          </template>
+          <template #status-cell="{ row }">
+            <UBadge :label="STATUS_META[row.original.status]?.label || row.original.status" :color="(STATUS_META[row.original.status]?.color as any) || 'neutral'" variant="subtle" size="sm" />
+          </template>
+          <template #priority-cell="{ row }">
+            <UBadge :label="row.original.priority" :color="(PRIORITY_COLORS[row.original.priority] as any) || 'neutral'" variant="outline" size="sm" />
+          </template>
+          <template #project_id-cell="{ row }">
+            <span :title="projectName(row.original.project_id)">{{ projectName(row.original.project_id) }}</span>
+          </template>
+          <template #expected_online_date-cell="{ row }">
+            {{ row.original.expected_online_date || '—' }}
+          </template>
+          <template #creator-cell="{ row }">
+            <span :title="row.original.creator">{{ displayName(row.original.creator) }}</span>
+          </template>
+          <template #updated_at-cell="{ row }">
+            {{ fmtTime(row.original.updated_at) }}
+          </template>
 
-      <div v-else class="border border-default rounded-lg overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="text-left text-xs text-muted border-b border-default bg-elevated/50">
-              <th class="px-3 py-2 font-medium w-16">ID</th>
-              <th class="px-3 py-2 font-medium">标题</th>
-              <th class="px-3 py-2 font-medium w-24">状态</th>
-              <th class="px-3 py-2 font-medium w-16">优先级</th>
-              <th class="px-3 py-2 font-medium w-36 hidden md:table-cell">项目</th>
-              <th class="px-3 py-2 font-medium w-28 hidden lg:table-cell">期望上线</th>
-              <th class="px-3 py-2 font-medium w-24 hidden lg:table-cell">创建人</th>
-              <th class="px-3 py-2 font-medium w-36 hidden sm:table-cell">更新时间</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-default">
-            <tr
-              v-for="r in reqs"
-              :key="r.id"
-              class="cursor-pointer hover:bg-elevated/50 transition-colors"
-              @click="navigateTo(`/requirements/${r.id}`)"
-            >
-              <td class="px-3 py-2.5 text-muted">#{{ r.id }}</td>
-              <td class="px-3 py-2.5">
-                <div class="flex items-center gap-2 min-w-0">
-                  <UBadge
-                    :label="TYPE_LABELS[r.req_type]"
-                    :color="r.req_type === 'business' ? 'primary' : 'neutral'"
-                    variant="outline"
-                    size="sm"
-                    class="shrink-0"
-                  />
-                  <span class="truncate font-medium text-highlighted">{{ r.title }}</span>
-                  <UIcon v-if="r.parent_id" name="i-lucide-corner-down-right" class="size-3.5 text-dimmed shrink-0" title="子需求" />
-                </div>
-              </td>
-              <td class="px-3 py-2.5">
-                <UBadge :label="STATUS_META[r.status]?.label || r.status" :color="(STATUS_META[r.status]?.color as any) || 'neutral'" variant="subtle" size="sm" />
-              </td>
-              <td class="px-3 py-2.5">
-                <UBadge :label="r.priority" :color="(PRIORITY_COLORS[r.priority] as any) || 'neutral'" variant="outline" size="sm" />
-              </td>
-              <td class="px-3 py-2.5 text-muted hidden md:table-cell truncate">{{ projectName(r.project_id) }}</td>
-              <td class="px-3 py-2.5 text-muted hidden lg:table-cell">{{ r.expected_online_date || '—' }}</td>
-              <td class="px-3 py-2.5 text-muted hidden lg:table-cell truncate">{{ r.creator }}</td>
-              <td class="px-3 py-2.5 text-muted hidden sm:table-cell">{{ fmtTime(r.updated_at) }}</td>
-            </tr>
-          </tbody>
-        </table>
+          <template #empty>
+            <div class="py-16 text-center text-muted">
+              <UIcon name="i-lucide-clipboard-list" class="size-10 mx-auto mb-3 opacity-50" />
+              <p>暂无需求{{ status !== 'all' || projectId !== 'all' ? '（当前筛选条件下）' : '' }}</p>
+              <UButton v-if="status === 'all' && projectId === 'all'" variant="link" to="/requirements/new">
+                提交第一条需求
+              </UButton>
+            </div>
+          </template>
+        </UTable>
       </div>
 
       <div v-if="reqs?.length || offset > 0" class="flex items-center justify-end gap-2">
@@ -142,3 +158,11 @@ const { data: reqs, pending, error } = useFetch<Requirement[]>('/api/requirement
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 固定表格布局：让列宽尊重 meta 设定的 w-*，标题列超长才截断出省略号（truncate 才生效） */
+.reqs-table :deep(table) {
+  table-layout: fixed;
+  width: 100%;
+}
+</style>

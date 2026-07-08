@@ -186,8 +186,8 @@ function genConfirmText(): string {
   if (p.mode === 'incremental')
     return `增量更新只重新生成受代码改动影响的页面，通常几分钟。确定更新「${p.row.p.name}」吗？`
   if (p.force)
-    return `重新生成会覆盖「${p.row.p.name}」现有 wiki（手动编辑过的页面会保留），全流程约 10-20 分钟。确定继续吗？`
-  return `生成完整 wiki 需要克隆仓库、建立索引并生成几十个页面，通常需要 10-20 分钟。确定开始生成「${p.row.p.name}」吗？`
+    return `重新生成会覆盖「${p.row.p.name}」现有 wiki（手动编辑过的页面会保留），全流程约 2-10 分钟。确定继续吗？`
+  return `生成完整 wiki 需要克隆仓库、建立索引并生成几十个页面，通常需要 2-10 分钟。确定开始生成「${p.row.p.name}」吗？`
 }
 
 function askGen(row: Row, force = false, mode: 'full' | 'incremental' = 'full') {
