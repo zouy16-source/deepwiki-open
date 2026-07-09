@@ -24,6 +24,8 @@ const projectName = (id: number) => projects.value?.find(p => p.id === id)?.name
 
 const { displayName } = usePlatformUsers()
 
+const syncOpen = ref(false)
+
 watch([status, projectId], () => { offset.value = 0 })
 
 const query = computed(() => ({
@@ -32,7 +34,7 @@ const query = computed(() => ({
   ...(status.value !== 'all' ? { status: status.value } : {}),
   ...(projectId.value !== 'all' ? { project_id: projectId.value } : {}),
 }))
-const { data: reqs, pending, error } = useFetch<Requirement[]>('/api/requirements', {
+const { data: reqs, pending, error, refresh } = useFetch<Requirement[]>('/api/requirements', {
   query,
   default: () => [],
 })
@@ -61,7 +63,10 @@ function onSelect(_e: Event, row: TableRow<Requirement>) {
         <USelect v-model="status" :items="statusItems" class="w-36" />
         <USelect v-model="projectId" :items="projectItems" class="w-48" />
         <span v-if="pending" class="text-xs text-muted">加载中…</span>
-        <UButton icon="i-lucide-messages-square" class="ml-auto" to="/requirements/chat">
+        <UButton icon="i-lucide-refresh-cw" variant="soft" color="neutral" class="ml-auto" @click="syncOpen = true">
+          从 TAPD 同步
+        </UButton>
+        <UButton icon="i-lucide-messages-square" to="/requirements/chat">
           对话创建需求
         </UButton>
         <UButton icon="i-lucide-plus" variant="soft" to="/requirements/new">
@@ -99,11 +104,20 @@ function onSelect(_e: Event, row: TableRow<Requirement>) {
                 class="shrink-0"
               />
               <span class="truncate font-medium text-highlighted" :title="row.original.title">{{ row.original.title }}</span>
+              <UBadge v-if="row.original.source === 'tapd'" label="TAPD" color="warning" variant="soft" size="sm" class="shrink-0" title="TAPD 同步镜像（只读）" />
               <UIcon v-if="row.original.parent_id" name="i-lucide-corner-down-right" class="size-3.5 text-dimmed shrink-0" title="子需求" />
             </div>
           </template>
           <template #status-cell="{ row }">
-            <UBadge :label="STATUS_META[row.original.status]?.label || row.original.status" :color="(STATUS_META[row.original.status]?.color as any) || 'neutral'" variant="subtle" size="sm" />
+            <!-- TAPD 镜像需求展示 TAPD 原始状态，而非平台哨兵态 -->
+            <UBadge
+              v-if="row.original.source === 'tapd'"
+              :label="row.original.external_status || 'TAPD'"
+              color="neutral"
+              variant="subtle"
+              size="sm"
+            />
+            <UBadge v-else :label="STATUS_META[row.original.status]?.label || row.original.status" :color="(STATUS_META[row.original.status]?.color as any) || 'neutral'" variant="subtle" size="sm" />
           </template>
           <template #priority-cell="{ row }">
             <UBadge :label="row.original.priority" :color="(PRIORITY_COLORS[row.original.priority] as any) || 'neutral'" variant="outline" size="sm" />
@@ -155,6 +169,8 @@ function onSelect(_e: Event, row: TableRow<Requirement>) {
           下一页
         </UButton>
       </div>
+
+      <TapdSyncModal v-model:open="syncOpen" @synced="() => { offset = 0; refresh() }" />
     </div>
   </div>
 </template>

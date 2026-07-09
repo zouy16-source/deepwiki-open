@@ -26,13 +26,37 @@ const { data: parent } = useFetch<Requirement>(
   { immediate: false, watch: [() => req.value?.parent_id], default: () => null as Requirement | null },
 )
 
+// TAPD 镜像需求只读：不显示平台流转/评审/建子需求，改显示同步入口；但保留 AI 分析（增值）
+const isTapd = computed(() => req.value?.source === 'tapd')
+
 // start_review/approve/reject 由评审卡片（RequirementReviews）驱动，不在通用按钮出现
 const actions = computed<FlowAction[]>(() =>
-  (req.value ? allowedActions(req.value.status) : []).filter(a => !REVIEW_MANAGED_ACTIONS.has(a.action)),
+  isTapd.value
+    ? []
+    : (req.value ? allowedActions(req.value.status) : []).filter(a => !REVIEW_MANAGED_ACTIONS.has(a.action)),
 )
 
 async function onReviewChanged() {
   await Promise.all([refreshReq(), refreshEvents()])
+}
+
+// 从 TAPD 重新同步本需求所属项目（TAPD 侧改动后拉最新）
+const syncing = ref(false)
+async function resync() {
+  if (!req.value || syncing.value) return
+  syncing.value = true
+  try {
+    const res = await $fetch<{ created: number, updated: number }>('/api/tapd/sync', {
+      method: 'POST',
+      body: { project_id: req.value.project_id },
+    })
+    toast.add({ title: 'TAPD 同步完成', description: `更新 ${res.updated}、新增 ${res.created}`, color: 'success' })
+    await Promise.all([refreshReq(), refreshEvents()])
+  } catch (e: any) {
+    toast.add({ title: '同步失败', description: e?.data?.detail || e?.statusMessage || '请重试', color: 'error' })
+  } finally {
+    syncing.value = false
+  }
 }
 
 // 流转确认弹窗
@@ -95,6 +119,21 @@ const timeline = computed(() => [...(events.value || [])].reverse())
           <div class="flex flex-wrap items-start gap-3">
             <h1 class="text-xl font-bold text-highlighted flex-1 min-w-60">{{ req.title }}</h1>
             <div class="flex flex-wrap gap-2">
+              <template v-if="isTapd">
+                <UButton
+                  color="neutral"
+                  variant="outline"
+                  size="sm"
+                  icon="i-lucide-external-link"
+                  :to="req.external_url"
+                  target="_blank"
+                >
+                  在 TAPD 打开
+                </UButton>
+                <UButton color="primary" size="sm" icon="i-lucide-refresh-cw" :loading="syncing" @click="resync">
+                  同步
+                </UButton>
+              </template>
               <UButton
                 v-for="a in actions"
                 :key="a.action"
@@ -110,12 +149,25 @@ const timeline = computed(() => [...(events.value || [])].reverse())
 
           <div class="flex flex-wrap items-center gap-2">
             <UBadge :label="TYPE_LABELS[req.req_type]" :color="req.req_type === 'business' ? 'primary' : 'neutral'" variant="outline" />
-            <UBadge :label="STATUS_META[req.status]?.label || req.status" :color="(STATUS_META[req.status]?.color as any) || 'neutral'" variant="subtle" />
+            <UBadge v-if="isTapd" label="TAPD 只读镜像" color="warning" variant="soft" />
+            <UBadge
+              v-if="isTapd"
+              :label="req.external_status || 'TAPD'"
+              color="neutral"
+              variant="subtle"
+            />
+            <UBadge v-else :label="STATUS_META[req.status]?.label || req.status" :color="(STATUS_META[req.status]?.color as any) || 'neutral'" variant="subtle" />
             <UBadge :label="req.priority" :color="(PRIORITY_COLORS[req.priority] as any)" variant="outline" />
             <UBadge v-if="req.complexity" :label="`复杂度 ${req.complexity}`" color="info" variant="outline" />
             <span class="text-xs text-muted ml-1">
-              <span :title="req.creator">{{ displayName(req.creator) }}</span> 创建于 {{ fmtTime(req.created_at) }} · 更新于 {{ fmtTime(req.updated_at) }}
-              <template v-if="req.expected_online_date"> · 期望上线 {{ req.expected_online_date }}</template>
+              <template v-if="isTapd">
+                处理人 <span :title="req.assignee">{{ displayName(req.assignee) }}</span>
+                · 同步于 {{ fmtTime(req.synced_at) }}
+              </template>
+              <template v-else>
+                <span :title="req.creator">{{ displayName(req.creator) }}</span> 创建于 {{ fmtTime(req.created_at) }} · 更新于 {{ fmtTime(req.updated_at) }}
+                <template v-if="req.expected_online_date"> · 期望上线 {{ req.expected_online_date }}</template>
+              </template>
             </span>
           </div>
         </div>
@@ -132,15 +184,15 @@ const timeline = computed(() => [...(events.value || [])].reverse())
         <!-- AI 可行性分析（FR-ANA，W5） -->
         <RequirementAnalysis :requirement="req" @changed="onReviewChanged" />
 
-        <!-- 评审（FR-REV-01/02） -->
-        <RequirementReviews :requirement="req" @changed="onReviewChanged" />
+        <!-- 评审（FR-REV-01/02）：TAPD 镜像需求在源系统评审，平台不代管 -->
+        <RequirementReviews v-if="!isTapd" :requirement="req" @changed="onReviewChanged" />
 
         <!-- 子需求 -->
         <UCard>
           <template #header>
             <div class="flex items-center justify-between">
               <span class="text-sm font-medium text-highlighted">子需求（系统需求）{{ children?.length ? `· ${children.length}` : '' }}</span>
-              <UButton size="xs" variant="soft" icon="i-lucide-plus" :to="`/requirements/new?parent=${req.id}`">
+              <UButton v-if="!isTapd" size="xs" variant="soft" icon="i-lucide-plus" :to="`/requirements/new?parent=${req.id}`">
                 新建子需求
               </UButton>
             </div>

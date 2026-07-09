@@ -1,6 +1,15 @@
 from datetime import date, datetime, timezone
 
-from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -15,6 +24,11 @@ def utcnow() -> datetime:
 
 class Requirement(Base):
     __tablename__ = "requirement"
+    # 外部来源需求（TAPD）幂等键：同一来源同一外部 id 唯一。native 需求 external_id 为 NULL，
+    # MySQL 唯一约束允许多个 NULL，不影响平台原生需求。
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uq_requirement_source_external"),
+    )
 
     id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
     project_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -32,6 +46,18 @@ class Requirement(Base):
     # 对话式创建时的对话快照（产品×代码库 AI）；作为可行性分析 agent 的种子线索
     source_context: Mapped[str] = mapped_column(Text, default="")
     creator: Mapped[str] = mapped_column(String(64))
+
+    # --- 外部来源（TAPD 同步镜像，单向只读；native = 平台原生）---
+    # 新增 NOT NULL 列带 server_default，保证对已有行的 ALTER TABLE 安全（迁移教训）
+    source: Mapped[str] = mapped_column(String(16), default="native", server_default="native", index=True)
+    external_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    external_url: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    external_status: Mapped[str] = mapped_column(String(64), default="", server_default="")  # TAPD 原始状态（v_status 中文）
+    assignee: Mapped[str] = mapped_column(String(255), default="", server_default="")  # 处理人（映射后 username，映射不到存原 nick）
+    # TEXT 在 MySQL 不能有 server_default，故置 nullable；读写侧按空串/"{}" 兜底
+    external_extra: Mapped[str | None] = mapped_column(Text, nullable=True, default="{}")  # TAPD 全量字段兜底（JSON）：迭代/自定义字段/附件链接/工时等
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

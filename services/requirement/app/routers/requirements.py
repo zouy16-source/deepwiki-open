@@ -77,6 +77,9 @@ def transition(
     req = db.get(Requirement, req_id)
     if req is None:
         raise HTTPException(404, "requirement not found")
+    if req.source != "native":
+        # TAPD 等外部镜像需求只读：状态在源系统流转，平台不代管流转
+        raise HTTPException(409, "外部来源（TAPD）需求为只读镜像，不能在平台流转")
     try:
         apply_transition(
             db, req, body.action, subject,

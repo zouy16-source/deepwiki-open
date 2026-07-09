@@ -11,6 +11,13 @@ export interface Requirement {
   complexity: string | null
   expected_online_date: string | null
   creator: string
+  // 外部来源（TAPD 镜像，单向只读）；source='native' 时以下为空
+  source: 'native' | 'tapd'
+  external_id: string | null
+  external_url: string
+  external_status: string
+  assignee: string
+  synced_at: string | null
   created_at: string
   updated_at: string
 }
@@ -64,6 +71,7 @@ export interface PlatformUser {
   username: string
   display_name: string
   email: string
+  tapd_nick: string
   is_active: boolean
 }
 
@@ -73,5 +81,7 @@ export interface Project {
   code: string
   name: string
   description: string
+  repos: string[]
+  tapd_workspace_id: string
   created_at: string
 }

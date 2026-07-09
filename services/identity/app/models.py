@@ -21,6 +21,8 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(64), default="")
     email: Mapped[str] = mapped_column(String(128), default="")
     source: Mapped[str] = mapped_column(String(16), default="sso")  # sso | local
+    # TAPD 账号（nick）：按当前用户同步 TAPD 需求时用作 owner 过滤（用企业凭证 + 此 nick 过滤）
+    tapd_nick: Mapped[str] = mapped_column(String(64), default="", server_default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -56,6 +58,8 @@ class Project(Base):
     # 绑定的代码库（FR-KB-01/FR-ADM-02）：本地 clone 目录名 JSON 数组（如 ["eopl_galaxy-waybill"]），
     # 可行性分析 Agent 据此确定检索范围
     repos: Mapped[str] = mapped_column(Text, default="[]")
+    # TAPD workspace（项目）id：同步 TAPD 需求时映射到本 project；空 = 未接入 TAPD
+    tapd_workspace_id: Mapped[str] = mapped_column(String(32), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

@@ -35,6 +35,8 @@ def update_project(project_id: int, body: ProjectUpdate, db: Session = Depends(g
         project.description = body.description
     if body.repos is not None:
         project.repos = json.dumps(body.repos, ensure_ascii=False)
+    if body.tapd_workspace_id is not None:
+        project.tapd_workspace_id = body.tapd_workspace_id
     db.commit()
     db.refresh(project)
     return project

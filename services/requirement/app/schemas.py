@@ -31,14 +31,26 @@ class RequirementOut(BaseModel):
     expected_online_date: date | None
     source_context: str
     creator: str
+    # 外部来源（TAPD 镜像）；source='native' 时以下为空/None
+    source: str
+    external_id: str | None
+    external_url: str
+    external_status: str
+    assignee: str
+    synced_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
-    @field_validator("source_context", mode="before")
+    @field_validator("source_context", "external_url", "external_status", "assignee", mode="before")
     @classmethod
     def _none_to_empty(cls, v):
-        # 列为后加（ALTER TABLE），存量行为 NULL；序列化时统一坍缩为空串
+        # 部分列为后加（ALTER TABLE），存量行可能为 NULL；序列化时统一坍缩为空串
         return v or ""
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _default_source(cls, v):
+        return v or "native"
 
 
 class TransitionIn(BaseModel):

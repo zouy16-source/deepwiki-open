@@ -18,9 +18,8 @@ watch(projects, (ps) => {
 const project = computed(() => projects.value?.find(p => p.id === projectId.value) || null)
 const projectItems = computed(() => (projects.value || []).map(p => ({ label: p.name, value: p.id })))
 
-const repoName = ref('')
-watch(project, (p) => { repoName.value = p?.repos?.[0] || '' }, { immediate: true })
-const repoItems = computed(() => (project.value?.repos || []).map(r => ({ label: r, value: r })))
+// 多仓库自主路由：把项目绑定的全部仓库交给 agent，由它按问题自行选仓库检索（不再由用户预选单仓库）
+const repos = computed(() => project.value?.repos || [])
 
 // ---- 对话（agentic SSE：step 进度 + answer 终答）----
 interface ChatStep { tool: string, args: string, result: string }
@@ -94,7 +93,7 @@ async function consumeSse(resp: Response, onEvent: (ev: any) => void) {
 async function send() {
   const q = input.value.trim()
   if (!q || chatting.value) return
-  if (!repoName.value) {
+  if (!repos.value.length) {
     toast.add({ title: '当前项目未绑定代码库', description: '请先在项目空间绑定仓库（repos）', color: 'warning' })
     return
   }
@@ -108,7 +107,7 @@ async function send() {
     const resp = await fetch('/api/chat/agentic', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo: repoName.value, messages: history.map(m => ({ role: m.role, content: m.content })) }),
+      body: JSON.stringify({ repos: repos.value, messages: history.map(m => ({ role: m.role, content: m.content })) }),
     })
     if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`)
     await consumeSse(resp, (ev) => {
@@ -198,10 +197,13 @@ async function createRequirement() {
       <UButton variant="ghost" color="neutral" icon="i-lucide-arrow-left" size="sm" to="/requirements" />
       <span class="font-medium text-highlighted">对话创建需求</span>
       <USelect v-model="projectId" :items="projectItems" class="w-44" size="sm" :disabled="messages.length > 0" />
-      <USelect v-if="repoItems.length > 1" v-model="repoName" :items="repoItems" class="w-56" size="sm" />
-      <UBadge v-else-if="repoName" :label="repoName" color="neutral" variant="outline" size="sm" />
+      <!-- 多仓库自主路由：展示项目在检索范围内的仓库，由 AI 自行选仓库（含前后端） -->
+      <div v-if="repos.length" class="flex items-center gap-1.5">
+        <UIcon name="i-lucide-git-fork" class="size-3.5 text-dimmed" title="AI 会在这些仓库间自主检索" />
+        <UBadge v-for="r in repos" :key="r" :label="r" color="neutral" variant="outline" size="sm" />
+      </div>
       <UAlert
-        v-if="project && !repoName"
+        v-else-if="project"
         color="warning"
         variant="subtle"
         icon="i-lucide-circle-alert"

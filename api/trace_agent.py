@@ -59,12 +59,15 @@ async def run_repo_agent(llm, model: str, root: str, repo_label: str, layer: str
 
 async def run_tool_loop(llm, model: str, root: str, messages: list,
                         max_iters: int = MAX_ITERS, deadline_s: int = DEADLINE_S,
-                        on_step=None, log_label: str = ""):
-    """通用 grep/read_file/list_dir 工具循环（字段追溯与可行性分析共用）。
+                        on_step=None, log_label: str = "",
+                        tools_spec=None, dispatch_fn=None):
+    """通用工具循环（字段追溯 / 可行性分析 / 对话建需求共用）。
 
-    调用方自备 messages（system+user）；循环到模型不再调用工具或预算用尽，
-    返回 (最终文本, 工具调用轨迹)。
+    调用方自备 messages（system+user）；循环到模型不再调用工具或预算用尽，返回 (最终文本, 轨迹)。
+    默认单仓库（grep/read_file/list_dir 在 root 上执行）；多仓库自主路由时传 tools_spec + dispatch_fn(name, args)。
     """
+    spec = tools_spec or TOOLS_SPEC
+    disp = dispatch_fn or (lambda name, args: dispatch(root, name, args))
     steps = []
     started = time.monotonic()
     for it in range(max_iters):
@@ -74,7 +77,7 @@ async def run_tool_loop(llm, model: str, root: str, messages: list,
                 messages.append({"role": "user", "content": "时间预算已用完。立即基于已有证据输出最终调查报告，不要再调用工具。"})
             resp = await llm.chat.completions.create(
                 model=model, messages=messages, temperature=0.2,
-                **({} if timed_out else {"tools": TOOLS_SPEC}))
+                **({} if timed_out else {"tools": spec}))
         except Exception as e:  # noqa: BLE001
             logger.error(f"tool-loop LLM 调用失败 [{log_label}] iter={it}: {e}")
             return f"（调查中断：{e}）", steps
@@ -91,7 +94,7 @@ async def run_tool_loop(llm, model: str, root: str, messages: list,
                 args = json.loads(tc.function.arguments or "{}")
             except json.JSONDecodeError:
                 args = {}
-            result = await asyncio.to_thread(dispatch, root, tc.function.name, args)
+            result = await asyncio.to_thread(disp, tc.function.name, args)
             result = result[:MAX_TOOL_RESULT]
             step = {
                 "tool": tc.function.name,

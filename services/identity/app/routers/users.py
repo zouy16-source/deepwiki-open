@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from ..auth import current_subject
 from ..db import get_db
 from ..models import User
-from ..schemas import UserCreate, UserOut
+from ..schemas import UserCreate, UserOut, UserUpdate
 
 router = APIRouter()
 
@@ -35,3 +35,24 @@ def me(subject: str = Depends(current_subject), db: Session = Depends(get_db)):
         # SSO 首登用户尚未落库时，返回 token 主体，由登录流程负责建档
         return {"username": subject, "registered": False}
     return UserOut.model_validate(user).model_dump() | {"registered": True}
+
+
+@router.patch("/me", response_model=UserOut)
+def update_me(
+    body: UserUpdate,
+    subject: str = Depends(current_subject),
+    db: Session = Depends(get_db),
+):
+    """当前用户自助更新档案（一期主要用于绑定 TAPD 账号 tapd_nick）。"""
+    user = db.scalar(select(User).where(User.username == subject))
+    if user is None:
+        raise HTTPException(404, "user not found; login first to provision")
+    if body.display_name is not None:
+        user.display_name = body.display_name
+    if body.email is not None:
+        user.email = body.email
+    if body.tapd_nick is not None:
+        user.tapd_nick = body.tapd_nick
+    db.commit()
+    db.refresh(user)
+    return user

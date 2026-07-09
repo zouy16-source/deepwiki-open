@@ -13,6 +13,7 @@ export const STATUS_META: Record<string, { label: string, color: string }> = {
   released: { label: '已上线', color: 'success' },
   closed: { label: '已关闭', color: 'neutral' },
   rejected: { label: '已打回', color: 'error' },
+  synced: { label: 'TAPD 同步', color: 'neutral' },  // TAPD 镜像需求哨兵态（不进状态机，只读）
 }
 
 export const TYPE_LABELS: Record<string, string> = {

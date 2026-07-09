@@ -54,7 +54,8 @@ def start_analysis(
     req = db.get(Requirement, req_id)
     if req is None:
         raise HTTPException(404, "requirement not found")
-    if req.status != "pending_analysis":
+    # TAPD 镜像需求（source!=native）允许直接发起分析（增值）；平台原生需求须处于待分析
+    if req.source == "native" and req.status != "pending_analysis":
         raise HTTPException(409, f"analysis requires status 'pending_analysis', current: '{req.status}'")
     active = db.scalar(
         select(AnalysisRun).where(

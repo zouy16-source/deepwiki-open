@@ -18,7 +18,10 @@ const latest = computed(() => runs.value?.[0] || null)
 const activeRun = computed(() =>
   latest.value && (latest.value.status === 'queued' || latest.value.status === 'running') ? latest.value : null,
 )
-const canStart = computed(() => props.requirement.status === 'pending_analysis' && !activeRun.value)
+// TAPD 镜像需求（source=tapd）随时可发起分析（增值）；平台原生需求须处于待分析
+const canStart = computed(() =>
+  (props.requirement.source === 'tapd' || props.requirement.status === 'pending_analysis') && !activeRun.value,
+)
 
 const STATUS_BADGE: Record<AnalysisRun['status'], { label: string, color: string }> = {
   queued: { label: '排队中', color: 'warning' },
@@ -146,7 +149,8 @@ watch(latest, (l) => {
     </div>
 
     <p v-else class="text-sm text-muted">
-      <template v-if="requirement.status === 'pending_analysis'">尚未发起分析，点击右上角「开始 AI 分析」。</template>
+      <template v-if="requirement.source === 'tapd'">TAPD 需求，可直接发起 AI 可行性分析。</template>
+      <template v-else-if="requirement.status === 'pending_analysis'">尚未发起分析，点击右上角「开始 AI 分析」。</template>
       <template v-else-if="requirement.status === 'draft'">需求提交分析后可发起 AI 分析。</template>
       <template v-else>暂无分析记录。</template>
     </p>
