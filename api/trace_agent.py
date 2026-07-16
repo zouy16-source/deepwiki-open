@@ -59,12 +59,13 @@ async def run_repo_agent(llm, model: str, root: str, repo_label: str, layer: str
 
 async def run_tool_loop(llm, model: str, root: str, messages: list,
                         max_iters: int = MAX_ITERS, deadline_s: int = DEADLINE_S,
-                        on_step=None, log_label: str = "",
+                        on_step=None, on_think=None, log_label: str = "",
                         tools_spec=None, dispatch_fn=None):
     """通用工具循环（字段追溯 / 可行性分析 / 对话建需求共用）。
 
     调用方自备 messages（system+user）；循环到模型不再调用工具或预算用尽，返回 (最终文本, 轨迹)。
     默认单仓库（grep/read_file/list_dir 在 root 上执行）；多仓库自主路由时传 tools_spec + dispatch_fn(name, args)。
+    on_step：每次工具调用后触发（进度）；on_think：每轮模型的思考文本（调工具前的推理，模型可能不返回）。
     """
     spec = tools_spec or TOOLS_SPEC
     disp = dispatch_fn or (lambda name, args: dispatch(root, name, args))
@@ -82,6 +83,11 @@ async def run_tool_loop(llm, model: str, root: str, messages: list,
             logger.error(f"tool-loop LLM 调用失败 [{log_label}] iter={it}: {e}")
             return f"（调查中断：{e}）", steps
         msg = resp.choices[0].message
+        # 思考文本：优先 reasoning_content（qwen thinking 模型），退回 content（调工具前的推理）
+        if on_think:
+            think = getattr(msg, "reasoning_content", None) or (msg.content if msg.tool_calls else None)
+            if think:
+                await on_think(think)
         if not msg.tool_calls:
             return (msg.content or "（模型未返回内容）"), steps
         # assistant 消息手动重建为 dict——避免 SDK 对象里 dashscope 不认的字段

@@ -165,6 +165,9 @@ async def agentic_chat(body: AgenticChatRequest):
         async def on_step(step: dict):
             await queue.put({"type": "step", **step})
 
+        async def on_think(text: str):
+            await queue.put({"type": "think", "content": text})
+
         async def produce():
             try:
                 llm, model = _make_llm()
@@ -179,7 +182,7 @@ async def agentic_chat(body: AgenticChatRequest):
                 answer, steps = await run_tool_loop(
                     llm, model, root="", messages=messages,
                     max_iters=iters, deadline_s=deadline,
-                    on_step=on_step, log_label=f"chat:{'+'.join(roots)}",
+                    on_step=on_step, on_think=on_think, log_label=f"chat:{'+'.join(roots)}",
                     tools_spec=_build_tools_spec(list(roots)),
                     dispatch_fn=_make_dispatch(roots, glossaries),
                 )

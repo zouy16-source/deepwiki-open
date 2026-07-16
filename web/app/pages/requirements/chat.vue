@@ -27,6 +27,7 @@ interface Msg {
   role: 'user' | 'assistant'
   content: string
   steps?: ChatStep[]
+  think?: string
   citesOk?: number
   citesBad?: number
   refuted?: number
@@ -36,6 +37,25 @@ const messages = ref<Msg[]>([])
 const input = ref('')
 const chatting = ref(false)
 const chatBox = ref<HTMLElement | null>(null)
+
+// 工具检索明细的图标与人话标签（args 是 JSON 串，容错解析）
+function stepIcon(tool: string): string {
+  return tool === 'glossary_lookup' ? 'i-lucide-book-open-text'
+    : tool === 'grep' ? 'i-lucide-search'
+    : tool === 'read_file' ? 'i-lucide-file-text'
+    : tool === 'list_dir' ? 'i-lucide-folder'
+    : 'i-lucide-wrench'
+}
+function stepText(s: ChatStep): string {
+  let a: Record<string, string> = {}
+  try { a = JSON.parse(s.args) } catch { /* 截断的 JSON，回退原串 */ }
+  const at = a.repo ? ` @${a.repo}` : ''
+  if (s.tool === 'glossary_lookup') return `术语表「${a.term || ''}」`
+  if (s.tool === 'grep') return `检索 ${a.pattern || ''}${at}`
+  if (s.tool === 'read_file') return `读取 ${a.path || ''}${at}`
+  if (s.tool === 'list_dir') return `目录 ${a.path || '.'}${at}`
+  return `${s.tool} ${s.args}`
+}
 
 // ---- 分栏拖拽（对话 / 草稿 宽度可调，记忆到 localStorage）----
 const chatWidth = ref(50) // 左栏宽度百分比
@@ -112,8 +132,10 @@ async function send() {
     })
     if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`)
     await consumeSse(resp, (ev) => {
-      if (ev.type === 'step') {
-        const last = messages.value[messages.value.length - 1]!
+      const last = messages.value[messages.value.length - 1]!
+      if (ev.type === 'think') {
+        patchLast({ think: (last.think ? last.think + '\n' : '') + ev.content })
+      } else if (ev.type === 'step') {
         patchLast({ steps: [...(last.steps || []), ev as ChatStep] })
       } else if (ev.type === 'answer') {
         patchLast({ content: ev.content, citesOk: ev.cites_ok, citesBad: ev.cites_bad, refuted: ev.refuted, toolCalls: ev.tool_calls })
@@ -238,10 +260,26 @@ async function createRequirement() {
                   <span v-if="m.refuted" class="text-warning">· 对抗验证驳回 {{ m.refuted }} 条否定结论</span>
                 </p>
               </template>
-              <span v-else-if="m.role === 'assistant'" class="inline-flex items-center gap-1.5 text-muted">
-                <UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />
-                {{ m.steps?.length ? '正在检索代码…' : '思考中…' }}
-              </span>
+              <div v-else-if="m.role === 'assistant'" class="space-y-2 text-muted w-full min-w-0">
+                <span class="inline-flex items-center gap-1.5">
+                  <UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />
+                  {{ m.steps?.length ? '正在检索代码…' : (m.think ? '正在思考…' : '思考中…') }}
+                </span>
+                <!-- AI 思考内容 -->
+                <div v-if="m.think" class="text-xs bg-elevated/40 rounded p-2 border-l-2 border-primary/40 whitespace-pre-wrap max-h-40 overflow-y-auto italic">
+                  {{ m.think }}
+                </div>
+                <!-- 正在检索代码的明细 -->
+                <div v-if="m.steps?.length" class="text-xs font-mono space-y-1 max-h-52 overflow-y-auto">
+                  <div v-for="(s, si) in m.steps" :key="si" class="min-w-0">
+                    <div class="flex items-center gap-1.5 text-highlighted">
+                      <UIcon :name="stepIcon(s.tool)" class="size-3.5 shrink-0" />
+                      <span class="truncate">{{ stepText(s) }}</span>
+                    </div>
+                    <div v-if="s.result" class="pl-5 text-dimmed truncate">→ {{ s.result }}</div>
+                  </div>
+                </div>
+              </div>
               <span v-else class="whitespace-pre-wrap">{{ m.content }}</span>
             </div>
           </div>
@@ -266,7 +304,7 @@ async function createRequirement() {
                 size="sm"
                 icon="i-lucide-send"
                 :loading="chatting"
-                :disabled="!input.trim() || !repoName"
+                :disabled="!input.trim() || !repos.length"
                 @click="send"
               >
                 发送
