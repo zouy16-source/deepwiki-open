@@ -1,0 +1,73 @@
+# Phase-3 编码引擎 POC —— 统一模型网关(LiteLLM proxy)
+#
+# 一个网关同时对外提供两种协议、都路由到同一国产模型后端:
+#   · OpenAI 兼容   http://<gw>:4100/v1                → OpenHands / Aider / SWE-agent
+#   · Anthropic 兼容 http://<gw>:4100  (POST /v1/messages) → Claude Code Runtime
+#
+# 所有 model 走各家「OpenAI 兼容端点 + 显式 api_base」——统一、可预测、且端点都在境内(不出海)。
+# ⚠️ 模型 ID 会随厂商迭代变化(post-cutoff),跑之前用各家最新 docs / `/v1/models` 复核一遍。
+
+model_list:
+  # ---------- DeepSeek(api.deepseek.com,境内)----------
+  - model_name: deepseek-chat
+    litellm_params:
+      model: openai/deepseek-chat
+      api_base: https://api.deepseek.com
+      api_key: os.environ/DEEPSEEK_API_KEY
+  - model_name: deepseek-reasoner
+    litellm_params:
+      model: openai/deepseek-reasoner
+      api_base: https://api.deepseek.com
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  # ---------- 通义 Qwen(DashScope 兼容模式,境内)----------
+  - model_name: qwen-plus
+    litellm_params:
+      model: openai/qwen-plus
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+  - model_name: qwen3-coder            # 编码任务优先用 coder 变体(名称请复核)
+    litellm_params:
+      model: openai/qwen3-coder-plus
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+
+  # ---------- 智谱 GLM(open.bigmodel.cn,境内)----------
+  - model_name: glm-4.6                 # 版本号请复核
+    litellm_params:
+      model: openai/glm-4.6
+      api_base: https://open.bigmodel.cn/api/paas/v4
+      api_key: os.environ/ZHIPU_API_KEY
+
+  # ---------- Kimi / Moonshot(api.moonshot.cn,境内)----------
+  - model_name: kimi-k2                 # 版本号请复核
+    litellm_params:
+      model: openai/kimi-k2-0711-preview
+      api_base: https://api.moonshot.cn/v1
+      api_key: os.environ/MOONSHOT_API_KEY
+
+  # ---------- Claude Code 安全别名 ----------
+  # Claude Code 会请求硬编码的 claude-* 名称。首选做法是用环境变量把它顶掉:
+  #   ANTHROPIC_MODEL=deepseek-chat  ANTHROPIC_SMALL_FAST_MODEL=deepseek-chat
+  # 下面几条别名是兜底:万一某版本 Claude Code 请求了没顶掉的名字,也能落到国产后端。
+  # 若日志里看到 "model not found: claude-xxx",把那个名字照抄成一条新别名即可。
+  - model_name: claude-3-5-haiku-20241022
+    litellm_params:
+      model: openai/deepseek-chat
+      api_base: https://api.deepseek.com
+      api_key: os.environ/DEEPSEEK_API_KEY
+  - model_name: claude-sonnet-4-20250514
+    litellm_params:
+      model: openai/deepseek-chat
+      api_base: https://api.deepseek.com
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+# 无 database_url → 无状态运行(POC 不需要 key 管理/持久化,仅用 master_key 鉴权)
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  drop_params: true          # 丢弃各家不支持的参数(跨 provider 兼容,如 Kimi 的 temperature 约束)
+  set_verbose: false         # 排障时改 true
+  # 需要更长兜底超时可解开:
+  # request_timeout: 600

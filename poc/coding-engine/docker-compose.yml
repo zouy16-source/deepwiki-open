@@ -1,0 +1,32 @@
+# Phase-3 编码引擎 POC 网关 —— 独立、无状态、端口 :4100
+# 刻意与现网 DeepWiki 的 LiteLLM(docker-compose-litellm.yml,:4000 + postgres)隔离,互不影响。
+#
+#   启动:  cd poc/coding-engine && cp .env.example .env && 填好某一家 KEY,然后
+#          docker compose --env-file .env up -d
+#   验证:  ./smoke/models.sh && ./smoke/openai_ping.sh && ./smoke/anthropic_ping.sh
+#   停止:  docker compose down
+
+services:
+  gateway:
+    image: ghcr.io/berriai/litellm:v1.83.10-stable   # 与现网同版本,省一次拉取
+    container_name: poc-coding-gateway
+    ports:
+      - "4100:4000"                                   # 宿主 :4100 → 容器内 :4000
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-poc-1234}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      - ZHIPU_API_KEY=${ZHIPU_API_KEY:-}
+      - MOONSHOT_API_KEY=${MOONSHOT_API_KEY:-}
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"           # 引擎在别的容器里时用 host.docker.internal:4100
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4000/health/liveliness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
