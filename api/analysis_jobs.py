@@ -288,8 +288,10 @@ def _verify_citations(md: str, roots: list) -> tuple:
         if target is None or not (0 < line_no <= _lines(target)):
             bad += 1
             return m.group(0) + "（⚠️引用未通过核验）"
-        # 内容核验：取引用前 ~120 字里的代码标识符，看是否真的在引用行附近出现
-        pre = m.string[max(0, m.start() - 120):m.start()]
+        # 内容核验：取引用前文里的代码标识符，看是否真的在引用行附近出现。
+        # 窗口限制在**当前行内**（回退到上一个换行）——否则逐条列表里会把上一条的标识符带进来，造成假阳性。
+        line_start = m.string.rfind("\n", 0, m.start()) + 1
+        pre = m.string[max(line_start, m.start() - 120):m.start()]
         idents = _code_identifiers(pre)
         if idents:
             window = _read_window(target, line_no)

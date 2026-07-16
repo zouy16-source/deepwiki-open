@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from api import trace_tools
 from api.analysis_jobs import _make_llm, _verify_citations, adversarial_negation_check
+from api.glossary import load_or_build, lookup as glossary_lookup
 from api.trace_agent import run_tool_loop
 from api.trace_tools import TOOLS_SPEC, repos_root
 
@@ -77,8 +78,25 @@ def _resolve_repos(repo_names: list[str]) -> dict[str, str]:
     return out
 
 
+# 术语表查询工具：中文业务词 → 候选代码标识符（带出处）。不需 repo 参数（跨仓库查）。
+_GLOSSARY_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "glossary_lookup",
+        "description": "把中文业务词映射到代码标识符候选（从代码注释自动抽取，带出处）。"
+        "遇到中文业务词（如「收货地区」「运单」）先用它拿候选标识符，再据此 grep——"
+        "候选仅为线索，可能不准，必须 grep 到真实代码才采信。",
+        "parameters": {
+            "type": "object",
+            "properties": {"term": {"type": "string", "description": "中文业务词"}},
+            "required": ["term"],
+        },
+    },
+}
+
+
 def _build_tools_spec(repo_names: list[str]) -> list[dict]:
-    """在单仓库 TOOLS_SPEC 基础上，给每个工具加必填 repo 参数（自主路由的关键）。"""
+    """在单仓库 TOOLS_SPEC 基础上，给每个工具加必填 repo 参数（自主路由的关键）+ 术语表工具。"""
     spec = copy.deepcopy(TOOLS_SPEC)
     for tool in spec:
         fn = tool["function"]
@@ -89,12 +107,21 @@ def _build_tools_spec(repo_names: list[str]) -> list[dict]:
             "description": "在哪个仓库执行（必填）。按问题选择：接口/存储/业务逻辑通常在后端仓库，页面/交互/样式在前端仓库。",
         }
         fn["parameters"]["required"] = ["repo"] + fn["parameters"].get("required", [])
-    return spec
+    return spec + [_GLOSSARY_TOOL]
 
 
-def _make_dispatch(roots: dict[str, str]):
-    """多仓库分发：按 args.repo 定位 root，转调单仓库 dispatch；repo 非法则回可读错误让 agent 自纠。"""
+def _make_dispatch(roots: dict[str, str], glossaries: dict[str, dict]):
+    """多仓库分发：glossary_lookup 跨仓库查术语表；其余按 args.repo 定位 root 转调单仓库 dispatch。"""
     def dispatch(name: str, args: dict) -> str:
+        if name == "glossary_lookup":
+            term = str(args.get("term", "")).strip()
+            if not term:
+                return "（错误：term 为空）"
+            lines = []
+            for repo, gloss in glossaries.items():
+                for h in glossary_lookup(gloss, term):
+                    lines.append(f"{h['cn']} → {h['ident']}  （{repo}/{h['file']}:{h['line']}，线索，需 grep 核验）")
+            return "\n".join(lines) if lines else f"（术语表无「{term}」的映射，请直接 grep 尝试变体）"
         # 用 get 不 pop：保留 repo 供进度轨迹展示；trace_tools.dispatch 只读特定键、无视 repo
         repo = os.path.basename(str(args.get("repo", "")).strip())
         root = roots.get(repo)
@@ -111,10 +138,11 @@ def _system_prompt(roots: dict[str, str]) -> str:
 
 {chr(10).join(lines)}
 
-你有三个工具：grep、read_file、list_dir——每次调用都要指定 repo（在哪个仓库操作）。回答规则：
+你有四个工具：glossary_lookup（中文业务词→代码标识符候选）、grep、read_file、list_dir——后三个每次调用都要指定 repo。回答规则：
 1. **自主路由**：按问题性质选仓库——接口/服务/存储/业务逻辑查后端仓库，页面/组件/交互/样式查前端仓库；
    涉及前后端联动（如"某字段前端怎么展示、后端怎么存"）就分别在两个仓库检索；
-2. 涉及代码事实的问题**必须先用工具查证再回答**，禁止凭印象；标识符（camelCase 字段、接口路径、表名）优先精确 grep，无命中换变体多试；
+2. 涉及代码事实的问题**必须先用工具查证再回答**，禁止凭印象；**遇到中文业务词先 glossary_lookup 拿候选标识符**（它比盲猜英文准），
+   再用候选去精确 grep；候选只是线索、可能不准，必须 grep 到真实代码才采信，无命中就换变体多试；
 3. 结论标注来源 `完整相对路径:行号`（并注明所在仓库），路径与行号逐字来自工具返回——系统会机器核验，编造会被标记；
 4. 确实查不到时明确说"未找到"并列出尝试过的搜索词，不编造；
 5. 中文回答，面向产品经理：先给结论、再给依据，避免过度铺陈技术细节。"""
@@ -146,12 +174,14 @@ async def agentic_chat(body: AgenticChatRequest):
                 ]
                 iters = int(os.environ.get("CHAT_AGENT_ITERS", "10"))
                 deadline = int(os.environ.get("CHAT_AGENT_DEADLINE_S", "120"))
+                # 预构建各仓库术语表（带缓存，代码变了自动重抽）
+                glossaries = {name: load_or_build(name, rt) for name, rt in roots.items()}
                 answer, steps = await run_tool_loop(
                     llm, model, root="", messages=messages,
                     max_iters=iters, deadline_s=deadline,
                     on_step=on_step, log_label=f"chat:{'+'.join(roots)}",
                     tools_spec=_build_tools_spec(list(roots)),
-                    dispatch_fn=_make_dispatch(roots),
+                    dispatch_fn=_make_dispatch(roots, glossaries),
                 )
                 # 对抗验证否定结论 + 引用核验（内容级），对项目全部仓库的并集
                 roots_list = list(roots.items())
