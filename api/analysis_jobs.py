@@ -221,6 +221,15 @@ _CITE_RE = re.compile(
     r"\s*[:：]\s*(\d+)`?"
 )
 
+# 代码标识符提取：只保留带 camelCase / PascalCase / snake_case 信号的 token（长度≥4），
+# 过滤掉 field/class/list 这类纯小写歧义词与中文，降低误判。
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
+_CODEY_RE = re.compile(r"[a-z][A-Z]|[A-Z][a-z].*[A-Z]|_")
+
+
+def _code_identifiers(text: str) -> set:
+    return {t for t in _IDENT_RE.findall(text or "") if _CODEY_RE.search(t)}
+
 
 def _build_file_index(roots: list) -> dict:
     """basename -> [绝对路径]。走一遍仓库树（跳过噪声目录），供引用核验。"""
@@ -235,9 +244,23 @@ def _build_file_index(roots: list) -> dict:
     return index
 
 
+def _read_window(path: str, line_no: int, ctx: int = 3) -> str:
+    """读引用行 ±ctx 行的实际代码（内容级核验用）。"""
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+    except OSError:
+        return ""
+    lo, hi = max(0, line_no - 1 - ctx), min(len(lines), line_no + ctx)
+    return "".join(lines[lo:hi])
+
+
 def _verify_citations(md: str, roots: list) -> tuple:
-    """逐条机器核验 `文件:行号`：文件存在（路径后缀匹配）且行号不超行数 → 通过；
-    否则原地追加 ⚠️ 标记。返回 (标注后的 md, 通过数, 未通过数)。"""
+    """逐条机器核验 `文件:行号`，两级：
+      1) 位置核验：文件存在（路径后缀匹配）且行号不超行数；
+      2) 内容核验：引用前文若提到代码标识符，则该标识符须出现在引用行 ±3 行内。
+    位置不过 → ⚠️引用未通过核验；位置过但内容不符 → ⚠️引用内容存疑（均计入未通过）。
+    返回 (标注后的 md, 通过数, 未通过数)。"""
     index = _build_file_index(roots)
     line_counts: dict = {}
     ok = bad = 0
@@ -261,13 +284,91 @@ def _verify_citations(md: str, roots: list) -> tuple:
         )
         if target is None and len(candidates) == 1:
             target = candidates[0]  # 只写了文件名且全仓唯一：可定位
-        if target is not None and 0 < line_no <= _lines(target):
-            ok += 1
-            return m.group(0)
-        bad += 1
-        return m.group(0) + "（⚠️引用未通过核验）"
+        # 位置核验
+        if target is None or not (0 < line_no <= _lines(target)):
+            bad += 1
+            return m.group(0) + "（⚠️引用未通过核验）"
+        # 内容核验：取引用前 ~120 字里的代码标识符，看是否真的在引用行附近出现
+        pre = m.string[max(0, m.start() - 120):m.start()]
+        idents = _code_identifiers(pre)
+        if idents:
+            window = _read_window(target, line_no)
+            if not any(idt in window for idt in idents):
+                bad += 1
+                return m.group(0) + "（⚠️引用内容存疑：该行未见所述标识符）"
+        ok += 1
+        return m.group(0)
 
     return _CITE_RE.sub(_check, md), ok, bad
+
+
+# --- 否定结论对抗验证（打击"漏查→假阴性"：grep 一次没命中就下"不存在"结论）------
+
+_NEG_RE = re.compile(
+    r"(未找到|未发现|未定位|不存在|没有找到|没有发现|未定义|查不到|未命中|无相关实现|未见)"
+)
+
+
+def _ident_variants(ident: str) -> set:
+    """标识符多变体：原样 / camel↔snake / 去 get·set·is·has 前缀。"""
+    v = {ident, ident.lower()}
+    snake = re.sub(r"(?<=[a-z0-9])([A-Z])", r"_\1", ident).lower()
+    v.add(snake)
+    if "_" in ident:
+        parts = [p for p in ident.split("_") if p]
+        if parts:
+            v.add(parts[0] + "".join(p.capitalize() for p in parts[1:]))
+    for p in ("get", "set", "is", "has"):
+        if ident.startswith(p) and len(ident) > len(p) + 2:
+            rest = ident[len(p):]
+            v.add(rest[0].lower() + rest[1:])
+    return {x for x in v if len(x) >= 4}
+
+
+def adversarial_negation_check(answer: str, roots: list, max_claims: int = 6) -> tuple:
+    """对回答里的否定结论做确定性对抗验证：提取被否定的代码标识符，多变体跨仓库重新 grep。
+    命中即为假阴性反证（原结论可能错），在回答末尾追加「对抗验证」段。纯 grep、无 LLM 调用。
+    返回 (标注后的回答, 反证数)。"""
+    from api.trace_tools import grep
+
+    # 收集否定句里的候选标识符
+    claims: list[str] = []
+    seen: set = set()
+    for line in answer.splitlines():
+        if not _NEG_RE.search(line):
+            continue
+        for idt in _code_identifiers(line):
+            if idt not in seen:
+                seen.add(idt)
+                claims.append(idt)
+    claims = claims[:max_claims]
+    if not claims:
+        return answer, 0
+
+    refutations = []
+    for idt in claims:
+        hit_line = None
+        for variant in sorted(_ident_variants(idt), key=len, reverse=True):
+            for name, root in roots:
+                out = grep(root, variant, max_hits=3)
+                if out and not out.startswith("（无命中"):
+                    first = out.splitlines()[0]  # rel:line: 内容
+                    parts = first.split(":", 2)
+                    if len(parts) >= 2 and parts[1].strip().isdigit():
+                        hit_line = f"{name}/{parts[0]}:{parts[1].strip()}"
+                        break
+            if hit_line:
+                break
+        if hit_line:
+            refutations.append((idt, hit_line))
+
+    if not refutations:
+        return answer, 0
+
+    lines = ["", "---", "### ⚠️ 对抗验证（对否定结论的多变体二次检索）"]
+    for idt, loc in refutations:
+        lines.append(f"- `{idt}`：原结论称未找到，但二次检索在 `{loc}` 命中——原结论可能为**假阴性**，请复核。")
+    return answer + "\n".join(lines) + "\n", len(refutations)
 
 
 async def run_feasibility_analysis(
@@ -336,12 +437,16 @@ async def run_feasibility_analysis(
     )
     result = _parse_tags(resp.choices[0].message.content or "")
 
-    verified_md, cites_ok, cites_bad = _verify_citations(result["report_md"], roots)
+    # 对抗验证否定结论（假阴性反证）→ 再逐条核验全部引用（含对抗验证追加的真实出处）
+    checked, refuted = adversarial_negation_check(result["report_md"], roots)
+    verified_md, cites_ok, cites_bad = _verify_citations(checked, roots)
     trust = ""
     if cites_ok + cites_bad > 0:
         trust = f" · 引用核验：{cites_ok} 通过 / {cites_bad} 未通过"
         if cites_bad > cites_ok:
             trust += "（⚠️多数引用未通过核验，结论请人工复核）"
+    if refuted:
+        trust += f" · 对抗验证驳回 {refuted} 条否定结论（疑似假阴性）"
     header = (
         f"> 检索时间：{started} · 检索仓库：{'、'.join(b for b, _ in roots)}"
         + (f"（缺失 clone：{'、'.join(missing)}）" if missing else "")

@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api import trace_tools
-from api.analysis_jobs import _make_llm, _verify_citations
+from api.analysis_jobs import _make_llm, _verify_citations, adversarial_negation_check
 from api.trace_agent import run_tool_loop
 from api.trace_tools import TOOLS_SPEC, repos_root
 
@@ -153,11 +153,14 @@ async def agentic_chat(body: AgenticChatRequest):
                     tools_spec=_build_tools_spec(list(roots)),
                     dispatch_fn=_make_dispatch(roots),
                 )
-                # 引用核验：对项目全部仓库的并集校验 文件:行号
-                verified, ok, bad = _verify_citations(answer, list(roots.items()))
+                # 对抗验证否定结论 + 引用核验（内容级），对项目全部仓库的并集
+                roots_list = list(roots.items())
+                checked, refuted = adversarial_negation_check(answer, roots_list)
+                verified, ok, bad = _verify_citations(checked, roots_list)
                 await queue.put({
                     "type": "answer", "content": verified,
                     "tool_calls": len(steps), "cites_ok": ok, "cites_bad": bad,
+                    "refuted": refuted,
                 })
             except Exception as e:  # noqa: BLE001
                 logger.exception("agentic chat failed [%s]", "+".join(roots))

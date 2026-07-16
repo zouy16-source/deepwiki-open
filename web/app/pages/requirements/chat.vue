@@ -29,6 +29,7 @@ interface Msg {
   steps?: ChatStep[]
   citesOk?: number
   citesBad?: number
+  refuted?: number
   toolCalls?: number
 }
 const messages = ref<Msg[]>([])
@@ -115,7 +116,7 @@ async function send() {
         const last = messages.value[messages.value.length - 1]!
         patchLast({ steps: [...(last.steps || []), ev as ChatStep] })
       } else if (ev.type === 'answer') {
-        patchLast({ content: ev.content, citesOk: ev.cites_ok, citesBad: ev.cites_bad, toolCalls: ev.tool_calls })
+        patchLast({ content: ev.content, citesOk: ev.cites_ok, citesBad: ev.cites_bad, refuted: ev.refuted, toolCalls: ev.tool_calls })
       } else if (ev.type === 'error') {
         patchLast({ content: `出错：${ev.message}` })
       }
@@ -234,6 +235,7 @@ async function createRequirement() {
                   <template v-if="(m.citesOk || 0) + (m.citesBad || 0) > 0">
                     · 引用核验 {{ m.citesOk }} 通过<template v-if="m.citesBad"> / <span class="text-warning">{{ m.citesBad }} 未通过</span></template>
                   </template>
+                  <span v-if="m.refuted" class="text-warning">· 对抗验证驳回 {{ m.refuted }} 条否定结论</span>
                 </p>
               </template>
               <span v-else-if="m.role === 'assistant'" class="inline-flex items-center gap-1.5 text-muted">
