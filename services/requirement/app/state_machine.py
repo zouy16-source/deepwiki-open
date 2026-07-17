@@ -29,6 +29,8 @@ TRANSITIONS: dict[tuple[str, str], str] = {
     ("rejected", "resubmit"): "pending_analysis",
     ("rejected", "close"): "closed",
     ("scheduled", "start_dev"): "in_dev",
+    # AI 编码产出 MR：自环,不改变生命周期状态,仅为「绑 MR 产物 + 留痕」
+    ("in_dev", "coding_done"): "in_dev",
     ("in_dev", "submit_test"): "in_test",
     ("in_test", "test_passed"): "pending_acceptance",
     ("in_test", "test_failed"): "in_dev",

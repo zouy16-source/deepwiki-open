@@ -11,8 +11,10 @@ class Settings(BaseSettings):
 
     # api 服务（AI 与知识库，:8001）——可行性分析任务在那边执行。
     analysis_base_url: str = "http://localhost:8001"
-    # identity 服务（:8003）——发起分析时查项目空间绑定的代码库。
+    # identity 服务（:8003）——发起分析/编码时查项目空间绑定的代码库。
     identity_base_url: str = "http://localhost:8003"
+    # dev 服务（AI 编码执行，:8004）——编码任务在那边后台执行。
+    dev_base_url: str = "http://localhost:8004"
     # 本服务对 api 服务可达的回调地址（compose 内为 http://requirement:8002；
     # api 跑 Docker、本服务跑宿主机时为 http://host.docker.internal:8002）。
     callback_base_url: str = "http://localhost:8002"

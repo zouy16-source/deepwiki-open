@@ -86,6 +86,31 @@ class AnalysisRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class CodingRun(Base):
+    """AI 编码执行记录(FR-DEV-01)。
+
+    任务在 dev 服务(:8004)后台执行(clone→改→测→push→开 MR);终态经
+    /internal/coding/callback 回写本表,succeeded 时把 MR 作为 artifact 绑到 FlowEvent
+    (action=coding_done,in_dev 自环,不改变生命周期状态——人工 Review/合并后再 submit_test)。
+    """
+
+    __tablename__ = "coding_run"
+
+    id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
+    requirement_id: Mapped[int] = mapped_column(
+        PK, ForeignKey("requirement.id"), index=True
+    )
+    repo: Mapped[str] = mapped_column(String(512))  # 目标仓库 git URL
+    branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="queued")  # queued/running/succeeded/failed
+    mr_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class Review(Base):
     """评审单（FR-REV-01/02）：发起时驱动 start_review 流转，结论驱动 approve/reject。
 

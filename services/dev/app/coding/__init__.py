@@ -5,6 +5,7 @@ K8s 式:平台控制面把任务派给一个 Worker(Pod)。第一个 Worker = Cl
 """
 
 from .claude_code_worker import ClaudeCodeWorker
+from .gitlab_ops import GitLabGitOps
 from .models import (
     CodingTask,
     ProgressCb,
@@ -25,4 +26,5 @@ __all__ = [
     "GitOps",
     "run_cmd",
     "ClaudeCodeWorker",
+    "GitLabGitOps",
 ]

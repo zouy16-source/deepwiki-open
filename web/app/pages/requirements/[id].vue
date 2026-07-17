@@ -184,6 +184,9 @@ const timeline = computed(() => [...(events.value || [])].reverse())
         <!-- AI 可行性分析（FR-ANA，W5） -->
         <RequirementAnalysis :requirement="req" @changed="onReviewChanged" />
 
+        <!-- AI 编码（FR-DEV-01）：发起 → SSE 实时进度 → GitLab MR -->
+        <RequirementCoding :requirement="req" @changed="onReviewChanged" />
+
         <!-- 评审（FR-REV-01/02）：TAPD 镜像需求在源系统评审，平台不代管 -->
         <RequirementReviews v-if="!isTapd" :requirement="req" @changed="onReviewChanged" />
 

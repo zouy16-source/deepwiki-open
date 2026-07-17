@@ -17,6 +17,7 @@ def create_project(body: ProjectCreate, db: Session = Depends(get_db)):
         raise HTTPException(409, f"project code '{body.code}' already exists")
     data = body.model_dump()
     data["repos"] = json.dumps(data.get("repos") or [], ensure_ascii=False)
+    data["repo_meta"] = json.dumps(data.get("repo_meta") or {}, ensure_ascii=False)
     project = Project(**data)
     db.add(project)
     db.commit()
@@ -35,6 +36,10 @@ def update_project(project_id: int, body: ProjectUpdate, db: Session = Depends(g
         project.description = body.description
     if body.repos is not None:
         project.repos = json.dumps(body.repos, ensure_ascii=False)
+    if body.repo_meta is not None:
+        project.repo_meta = json.dumps(
+            {k: v.model_dump() for k, v in body.repo_meta.items()}, ensure_ascii=False
+        )
     if body.tapd_workspace_id is not None:
         project.tapd_workspace_id = body.tapd_workspace_id
     db.commit()

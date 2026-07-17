@@ -124,6 +124,39 @@ class AnalysisCallbackIn(BaseModel):
     error: str = ""
 
 
+class CodingStartIn(BaseModel):
+    # 目标仓库 git URL;不传则尝试从项目 repo_meta 取(仅当唯一)
+    repo_url: str | None = None
+    # 基分支;不传则用 repo_meta 里的 default_branch(如 master),再退到 main
+    base_branch: str | None = None
+    test_cmd: str | None = None
+
+
+class CodingRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    requirement_id: int
+    repo: str
+    branch: str | None
+    status: str
+    mr_url: str | None
+    summary: str
+    error: str
+    created_by: str
+    created_at: datetime
+    finished_at: datetime | None
+
+
+class CodingCallbackIn(BaseModel):
+    run_id: int
+    status: Literal["succeeded", "failed"]
+    branch: str = ""
+    mr_url: str = ""
+    summary: str = ""
+    error: str = ""
+
+
 class FlowEventOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

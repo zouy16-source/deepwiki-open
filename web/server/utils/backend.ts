@@ -23,6 +23,11 @@ export function requirementBaseUrl(): string {
   return process.env.REQUIREMENT_BASE_URL || 'http://localhost:8002'
 }
 
+// dev 服务（services/dev：AI 编码执行 + 进度 SSE），端口约定见 services/README.md。
+export function devBaseUrl(): string {
+  return process.env.DEV_BASE_URL || 'http://localhost:8004'
+}
+
 export function gitlabUrl(): string {
   return (process.env.GITLAB_URL || 'https://gitlab.com').replace(/\/+$/, '')
 }

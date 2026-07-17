@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app.coding import (  # noqa: E402
     ClaudeCodeWorker,
     CodingTask,
+    GitLabGitOps,
     ProgressEvent,
     RuntimeDispatcher,
     WorkerStatus,
@@ -49,6 +50,10 @@ def main() -> int:
     ap.add_argument("--model", default=None, help="覆盖模型(一般留空,用 Claude Code 默认)")
     ap.add_argument("--workspace", default="/tmp/ai-worker-ws", help="工作区根目录")
     ap.add_argument("--keep", action="store_true", help="保留工作区(默认保留;此参数兼容占位)")
+    ap.add_argument("--open-pr", action="store_true",
+                    help="push 分支并在 GitLab 开 MR(需 export GITLAB_TOKEN)")
+    ap.add_argument("--full-clone", action="store_true",
+                    help="全量克隆(若服务端拒绝浅克隆 push 新分支时用)")
     args = ap.parse_args()
 
     task = CodingTask(
@@ -59,6 +64,8 @@ def main() -> int:
     dispatcher = RuntimeDispatcher(
         workers={"claude-code": ClaudeCodeWorker()},
         workspace_root=args.workspace, keep_workspace=True,
+        git_ops=GitLabGitOps() if args.open_pr else None,
+        clone_depth=None if args.full_clone else 1,
     )
 
     print(f"→ 任务 {task.task_id}:{task.title}\n→ 仓库 {task.repo_url} @ {task.base_branch}\n")
@@ -67,6 +74,8 @@ def main() -> int:
     print("\n" + "=" * 60)
     print(f"状态   : {result.status.value}")
     print(f"分支   : {result.branch}")
+    if result.pr_url:
+        print(f"MR     : {result.pr_url}")
     if result.summary:
         print(f"总结   : {result.summary[:800]}")
     if result.error:

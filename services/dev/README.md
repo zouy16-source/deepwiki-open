@@ -30,6 +30,21 @@ python services/dev/run_worker.py \
 
 > 将来接国产模型:给 `ClaudeCodeWorker` 的运行环境设 `ANTHROPIC_BASE_URL` 指向 [`poc/coding-engine/`](../../poc/coding-engine/) 网关即可,本 adapter 不用改。
 
+### 一路跑到 GitLab MR(git.ymdd.tech)
+
+`git.ymdd.tech` = 自建 **GitLab**,故 PR = **Merge Request**。加 `--open-pr` 即在 `commit` 后 push 分支并开 MR:
+
+```bash
+export GITLAB_TOKEN=glpat-...     # Personal/Project Access Token,scope: api + 可 push,角色 ≥ Developer
+# 自签证书内网:export GITLAB_INSECURE=1
+python services/dev/run_worker.py \
+  --repo https://git.ymdd.tech/galaxy/waybill.git \
+  --title "..." --desc "..." --base main \
+  --open-pr            # 若服务端拒绝浅克隆 push,再加 --full-clone
+```
+
+产出从 `branch+diff` 变成 **MR URL**。token 只用于 push URL 与 API 头,**不写进任何进度事件/日志**(有 `_redact`)。
+
 ## 代码结构
 
 | 文件 | 作用 |
@@ -37,14 +52,15 @@ python services/dev/run_worker.py \
 | `app/coding/models.py` | 契约:`CodingTask` / `WorkerResult` / `ProgressEvent`(零外部依赖) |
 | `app/coding/worker.py` | `CodingWorker` 抽象 + `RuntimeDispatcher`(workspace/git 生命周期)+ `GitOps` 钩子协议 |
 | `app/coding/claude_code_worker.py` | Claude Code 适配器(`claude -p --output-format stream-json` 无头子进程 + 事件解析) |
+| `app/coding/gitlab_ops.py` | **GitLab GitOps**:push 分支 + 建 MR(git.ymdd.tech,纯 stdlib) |
 | `run_worker.py` | 本地跑通器(CLI) |
 
-## 待接的 seam(下一步)
+## seam 状态
 
-1. **入口 · TAPD 触发**:平台在需求/任务进入"开发"态时,组一个 `CodingTask`(repo/base/描述 + 复用已有 agentic 调查/术语表结论作 `extra_context`)投给 `RuntimeDispatcher`。可复用 `services/requirement` 的 flow / `api` 的 agentic 调查。
-2. **出口 · push + 开 PR**:实现 `GitOps.push_and_open_pr`——依赖你的 git 平台(GitLab/Gitee/GitHub)与凭据;`RuntimeDispatcher(git_ops=...)` 注入即可,产出从 branch+diff 变成 PR URL。
-3. **CI · Jenkins**:PR 开出后触发 Jenkins;结果回写任务状态(可挂 `PostToolUse`/回调)。
-4. **服务化**:把 Dispatcher 包成 FastAPI 服务(`services/dev`,:8004),进度用 SSE 推(照 `api/agentic_chat.py` 的 on_step/on_think 模式)。
+- ✅ **出口 · push + 开 PR(GitLab MR)** —— `GitLabGitOps` 已实现,`--open-pr` 可用。
+- ⬜ **入口 · TAPD 触发**:平台在需求/任务进入"开发"态时,组一个 `CodingTask`(repo/base/描述 + 复用已有 agentic 调查/术语表结论作 `extra_context`)投给 `RuntimeDispatcher`。可复用 `services/requirement` 的 flow / `api` 的 agentic 调查。
+- ⬜ **CI · Jenkins**:MR 开出后触发 Jenkins;结果回写任务状态(可挂回调)。
+- ⬜ **服务化**:把 Dispatcher 包成 FastAPI 服务(`services/dev`,:8004),进度用 SSE 推(照 `api/agentic_chat.py` 的 on_step/on_think 模式)。
 
 ## 加一个新 Worker(将来横评/切换)
 

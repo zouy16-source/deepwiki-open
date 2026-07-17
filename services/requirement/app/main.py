@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from .config import settings
 from .db import Base, engine
-from .routers import analysis, requirements, reviews, tapd_sync
+from .routers import analysis, coding, requirements, reviews, tapd_sync
 
 
 @asynccontextmanager
@@ -27,4 +27,7 @@ app.include_router(reviews.router, prefix="/api", tags=["reviews"])
 # 分析发起/查询走 /api/**（经 BFF），回调走 /internal/**（服务间直连，不经 BFF）
 app.include_router(analysis.router, prefix="/api", tags=["analysis"])
 app.include_router(analysis.internal_router, tags=["analysis-internal"])
+# 编码发起走 /api/**(经 BFF),回调走 /internal/**(dev 服务直连)
+app.include_router(coding.router, prefix="/api", tags=["coding"])
+app.include_router(coding.internal_router, tags=["coding-internal"])
 app.include_router(tapd_sync.router, prefix="/api", tags=["tapd"])

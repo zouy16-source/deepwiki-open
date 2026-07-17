@@ -49,13 +49,15 @@ class GitOps(Protocol):
 
 class RuntimeDispatcher:
     def __init__(self, workers: dict[str, CodingWorker], workspace_root: str,
-                 git_ops: Optional[GitOps] = None, keep_workspace: bool = True):
+                 git_ops: Optional[GitOps] = None, keep_workspace: bool = True,
+                 clone_depth: Optional[int] = 1):
         if not workers:
             raise ValueError("至少注册一个 Worker")
         self.workers = workers
         self.workspace_root = workspace_root
         self.git_ops = git_ops
         self.keep_workspace = keep_workspace
+        self.clone_depth = clone_depth  # None = 全量克隆(某些服务端拒绝浅克隆 push 新分支时用)
         os.makedirs(workspace_root, exist_ok=True)
 
     def dispatch(self, task: CodingTask, worker_name: Optional[str] = None,
@@ -109,8 +111,11 @@ class RuntimeDispatcher:
     def _prepare_workspace(self, task: CodingTask, workdir: str, on_progress: ProgressCb) -> None:
         shutil.rmtree(workdir, ignore_errors=True)
         on_progress(ProgressEvent("log", f"clone {task.repo_url} @ {task.base_branch}"))
-        rc, _, err = run_cmd(["git", "clone", "--depth", "1", "-b", task.base_branch,
-                              task.repo_url, workdir])
+        clone_cmd = ["git", "clone"]
+        if self.clone_depth:
+            clone_cmd += ["--depth", str(self.clone_depth)]
+        clone_cmd += ["-b", task.base_branch, task.repo_url, workdir]
+        rc, _, err = run_cmd(clone_cmd)
         if rc != 0:
             raise RuntimeError(f"clone 失败:{err.strip()}")
         rc, _, err = run_cmd(["git", "checkout", "-b", task.branch], cwd=workdir)

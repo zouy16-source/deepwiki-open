@@ -58,6 +58,10 @@ class Project(Base):
     # 绑定的代码库（FR-KB-01/FR-ADM-02）：本地 clone 目录名 JSON 数组（如 ["eopl_galaxy-waybill"]），
     # 可行性分析 Agent 据此确定检索范围
     repos: Mapped[str] = mapped_column(Text, default="[]")
+    # 代码库补充元数据（FR-DEV-01）：名字 → {git_url, default_branch} 的 JSON 映射。
+    # 与 repos（名字）解耦——名字给分析 Agent 读本地 clone 用，git_url 给编码 Worker fresh clone 用。
+    # 名字在 repos 里但此处无条目 = 该库没配 git 地址（编码需手填/走别的库）。TEXT 不能 server_default 故 nullable。
+    repo_meta: Mapped[str | None] = mapped_column(Text, nullable=True, default="{}")
     # TAPD workspace（项目）id：同步 TAPD 需求时映射到本 project；空 = 未接入 TAPD
     tapd_workspace_id: Mapped[str] = mapped_column(String(32), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

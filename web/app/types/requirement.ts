@@ -50,6 +50,21 @@ export interface AnalysisRun {
   finished_at: string | null
 }
 
+// AI 编码执行记录（FR-DEV-01，requirement 服务；任务在 dev 服务执行后回调）。
+export interface CodingRun {
+  id: number
+  requirement_id: number
+  repo: string
+  branch: string | null
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  mr_url: string | null
+  summary: string
+  error: string
+  created_by: string
+  created_at: string
+  finished_at: string | null
+}
+
 // 评审单（FR-REV-01/02，requirement 服务）。conclusion 为空 = 评审中。
 export interface Review {
   id: number
@@ -75,6 +90,12 @@ export interface PlatformUser {
   is_active: boolean
 }
 
+// 代码库补充元数据：git 地址 + 默认分支（供 AI 编码 Worker fresh clone）。
+export interface RepoMeta {
+  git_url: string
+  default_branch: string
+}
+
 // identity 服务的项目空间（经 BFF /api/projects 代理）。
 export interface Project {
   id: number
@@ -82,6 +103,8 @@ export interface Project {
   name: string
   description: string
   repos: string[]
+  // 名字 → {git_url, default_branch}；名字在 repos 里但此处无条目 = 该库未配 git 地址
+  repo_meta: Record<string, RepoMeta>
   tapd_workspace_id: string
   created_at: string
 }
